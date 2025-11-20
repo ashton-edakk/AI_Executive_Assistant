@@ -78,7 +78,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     };
 
     setMessages(prev => [...prev, userMessage]);
-    
+
     const currentInput = inputText;
     setInputText('');
     setIsLoading(true);
@@ -97,7 +97,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         console.log('User not signed in, proceeding without auth token.');
       }
 
-      const requestBody: any = { 
+      const requestBody: any = {
         message: currentInput,
       };
 
@@ -107,11 +107,15 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         requestBody.partialTask = clarificationState.partialTask;
       }
 
-      const response = await fetch('http://localhost:8080/api/chat', {
+      const API_BASE_URL =
+        import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestBody),
       });
+
 
       if (!response.ok) {
         throw new Error('Failed to get response');
@@ -123,7 +127,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
       const data = await response.json();
       console.log('ChatBot received:', data);
-      
+
       let messageType: Message['type'];
       if (data.task_created) {
         messageType = 'task_created';
@@ -134,7 +138,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       }
 
       let responseText = data.response;
-      
+
       // If task is ready but user not signed in, add sign in prompt
       if (data.ready_to_create && !session) {
         responseText += "\n\n🔐 Please sign in to save this task to your list.";
@@ -216,7 +220,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     if (isUser) {
       return 'bg-indigo-600 text-white rounded-br-none';
     }
-    
+
     switch (type) {
       case 'task_created':
         return 'bg-green-100 text-green-800 rounded-bl-none border border-green-200';
@@ -233,7 +237,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
   const getTimestampStyle = (type: Message['type'], isUser: boolean) => {
     if (isUser) return 'text-indigo-200';
-    
+
     switch (type) {
       case 'task_created':
         return 'text-green-600';
@@ -280,16 +284,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`flex items-start gap-3 max-w-[85%] ${
-                message.isUser ? 'flex-row-reverse' : 'flex-row'
-              }`}
+              className={`flex items-start gap-3 max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'
+                }`}
             >
               <div
-                className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
-                  message.isUser
+                className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${message.isUser
                     ? 'bg-indigo-100 text-indigo-600'
                     : 'bg-gray-100 text-gray-600'
-                }`}
+                  }`}
               >
                 {message.isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
               </div>
@@ -304,9 +306,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
                   </div>
                 )}
                 <p className={`text-xs mt-2 ${getTimestampStyle(message.type, message.isUser)}`}>
-                  {message.timestamp.toLocaleTimeString([], { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
+                  {message.timestamp.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit'
                   })}
                 </p>
               </div>
@@ -340,7 +342,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder={
-              clarificationState.active 
+              clarificationState.active
                 ? "Provide the missing information..."
                 : "Ask me about your schedule, tasks, or say 'Create a task to...'"
             }
@@ -358,7 +360,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           </button>
         </div>
         <p className="text-xs text-gray-500 mt-2 text-center">
-          {clarificationState.active 
+          {clarificationState.active
             ? "Answer the question above to complete task creation"
             : "Press Enter to send, Shift+Enter for new line"
           }
