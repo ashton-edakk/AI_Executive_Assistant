@@ -12,10 +12,14 @@ async function bootstrap() {
 
   // --- Security Configuration for Web Apps ---
   app.enableCors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:5173', 'http://localhost:5173', 'http://127.0.0.1:5174', 'http://localhost:5174'], // Change this to your Cloudflare Pages URL in production
+    origin: [
+      'http://localhost:5173',
+      'https://ai-executive-assistant-frontend.pages.dev', // your Pages URL
+    ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
+
 
   const port = process.env.PORT || 8080;
   await app.listen(port);
