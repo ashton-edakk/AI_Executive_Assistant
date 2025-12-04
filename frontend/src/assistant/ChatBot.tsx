@@ -17,13 +17,6 @@ interface ChatBotProps {
   onClose: () => void;
 }
 
-interface StoredMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  type?: string;
-}
-
 const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
   const { session, supabase } = useSupabase();
   

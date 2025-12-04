@@ -110,7 +110,6 @@ const Dashboard: React.FC = () => {
       weekEnd.setDate(weekStart.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
-      const weekKey = weekStart.toISOString();
       const existingWeek = eventWeeks.find(w => w.weekStart.getTime() === weekStart.getTime());
       
       const weekLabel = weekStart.toLocaleDateString(undefined, {
