@@ -1,6 +1,6 @@
 // components/ChatBot.tsx
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User } from 'lucide-react';
+import { X, Send, Bot, User, Trash2 } from 'lucide-react'; 
 import ReactMarkdown from 'react-markdown';
 import { useSupabase } from '../context/SupabaseSessionContext';
 
@@ -17,29 +17,20 @@ interface ChatBotProps {
   onClose: () => void;
 }
 
-const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
-  const { session } = useSupabase();
-  const [messages, setMessages] = useState<Message[]>(
-    session ? [
-      {
-        id: 1,
-        text: "Hello! I'm your AI Executive Assistant. I can help you manage tasks and schedule. You can say things like:\n\n- \"Create a task to finish the report by Friday\"\n- \"Add 'prepare presentation slides' as high priority\"\n- \"Remind me to call John tomorrow\"",
-        isUser: false,
-        timestamp: new Date(),
-      }
-    ] : [
-      {
-        id: 1,
-        text: "🔐 Please sign in to use the AI Assistant. The chat feature is only available for signed-in users.",
-        isUser: false,
-        timestamp: new Date(),
-        type: 'info'
-      }
-    ]
-  );
+interface StoredMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  type?: string;
+}
 
+const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
+  const { session, supabase } = useSupabase();
+  
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(true);
   const [clarificationState, setClarificationState] = useState<{
     active: boolean;
     partialTask: any;
@@ -50,6 +41,120 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
   const scrollToBottom = (): void => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
+
+  const getWelcomeMessage = (): Message => ({
+    id: 1,
+    text: "Hello! I'm your AI Executive Assistant. I can help you manage tasks and schedule. You can say things like:\n\n- \"Create a task to finish the report by Friday\"\n- \"Add 'prepare presentation slides' as high priority\"\n- \"Remind me to call John tomorrow\"",
+    isUser: false,
+    timestamp: new Date(),
+  });
+
+  const getSignInWelcomeMessage = (): Message => ({
+    id: 1,
+    text: "🔐 Please sign in to use the AI Assistant. The chat feature is only available for signed-in users.",
+    isUser: false,
+    timestamp: new Date(),
+    type: 'info'
+  });
+
+  const loadChatHistory = async (): Promise<void> => {
+    if (!session?.user?.id) {
+      setMessages([getSignInWelcomeMessage()]);
+      setIsLoadingHistory(false);
+      return;
+    }
+
+    setIsLoadingHistory(true);
+    
+    try {
+      const { data: chatData, error } = await supabase
+        .from('user_chats')
+        .select('messages')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error loading chat history:', error);
+        throw error;
+      }
+
+      if (chatData?.messages && Array.isArray(chatData.messages)) {
+        const loadedMessages: Message[] = chatData.messages.map((msg: any, index: number) => ({
+          id: index,
+          text: msg.content,
+          isUser: msg.role === 'user',
+          timestamp: new Date(msg.timestamp),
+          type: msg.type
+        }));
+
+        if (loadedMessages.length === 0) {
+          setMessages([getWelcomeMessage()]);
+        } else {
+          setMessages(loadedMessages);
+        }
+      } else {
+        const welcomeMessage = getWelcomeMessage();
+        setMessages([welcomeMessage]);
+        await saveMessagesToDB([welcomeMessage]);
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+      setMessages([getWelcomeMessage()]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const saveMessagesToDB = async (messagesToSave: Message[]): Promise<boolean> => {
+    if (!session?.user?.id) return false;
+
+    try {
+      const storedMessages = messagesToSave.map(msg => ({
+        role: msg.isUser ? 'user' : 'assistant',
+        content: msg.text,
+        timestamp: msg.timestamp.toISOString(),
+        type: msg.type,
+      }));
+
+      const { error } = await supabase
+        .from('user_chats')
+        .upsert({
+          user_id: session.user.id,
+          messages: storedMessages,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'user_id'
+        });
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Failed to save chat to database:', error);
+      try {
+        localStorage.setItem(`chat_backup_${session.user.id}`, JSON.stringify(messagesToSave));
+      } catch {}
+      return false;
+    }
+  };
+
+  const clearChatHistory = async (): Promise<void> => {
+    if (!session?.user?.id || !confirm('Clear all chat history?')) return;
+
+    try {
+      const welcomeMessage = getWelcomeMessage();
+      setMessages([welcomeMessage]);
+      await saveMessagesToDB([welcomeMessage]);
+      localStorage.removeItem(`chat_backup_${session.user.id}`);
+    } catch (error) {
+      console.error('Failed to clear chat history:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      loadChatHistory();
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     scrollToBottom();
@@ -77,7 +182,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    // Create updated messages array with user message
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
 
     const currentInput = inputText;
     setInputText('');
@@ -116,14 +223,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         body: JSON.stringify(requestBody),
       });
 
-
       if (!response.ok) {
         throw new Error('Failed to get response');
       }
-
-      console.log('Response status:', response.status);
-      console.log('Auth header sent:', !!headers['Authorization']);
-      console.log('Session access token:', session?.access_token ? 'Present' : 'Missing');
 
       const data = await response.json();
       console.log('ChatBot received:', data);
@@ -152,9 +254,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         type: messageType,
       };
 
-      setMessages(prev => [...prev, botMessage]);
+      // Create final messages array with bot response
+      const finalMessages = [...updatedMessages, botMessage];
+      setMessages(finalMessages);
 
-      // If clarification is needed, store the state
+      // Save to database after receiving bot response
+      await saveMessagesToDB(finalMessages);
+
       if (data.needs_clarification) {
         setClarificationState({
           active: true,
@@ -175,7 +281,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         timestamp: new Date(),
         type: 'error',
       };
-      setMessages(prev => [...prev, errorMessage]);
+      
+      const finalMessages = [...messages, errorMessage];
+      setMessages(finalMessages);
+      
+      // Save error message too
+      await saveMessagesToDB(finalMessages);
+      
       setClarificationState({ active: false, partialTask: null, originalMessage: '' });
     } finally {
       setIsLoading(false);
@@ -256,15 +368,30 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed bottom-6 right-6 w-[500px] h-[700px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col z-50">
-      {/* Header */}
+      {/* Header - UPDATED with loading indicator and clear button */}
       <div className="bg-indigo-600 text-white p-4 rounded-t-2xl flex justify-between items-center">
         <div className="flex items-center gap-2">
           <Bot className="w-6 h-6" />
           <h3 className="font-semibold text-lg">AI Executive Assistant</h3>
+          {isLoadingHistory && (
+            <span className="text-xs bg-indigo-500 px-2 py-1 rounded animate-pulse">
+              Loading...
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {!session && (
             <span className="text-xs bg-yellow-500 px-2 py-1 rounded">Sign in to save tasks</span>
+          )}
+          {session && messages.length > 1 && (
+            <button
+              onClick={clearChatHistory}
+              className="text-white hover:text-red-200 transition-colors text-xs"
+              aria-label="Clear chat history"
+              title="Clear chat history"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           )}
           <button
             onClick={onClose}
@@ -276,65 +403,73 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Messages - UPDATED with loading state */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`flex items-start gap-3 max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'
-                }`}
-            >
-              <div
-                className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${message.isUser
-                    ? 'bg-indigo-100 text-indigo-600'
-                    : 'bg-gray-100 text-gray-600'
-                  }`}
-              >
-                {message.isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
-              </div>
-              <div
-                className={`px-4 py-3 rounded-2xl ${getMessageStyle(message.type, message.isUser)}`}
-              >
-                {message.isUser ? (
-                  <p className="text-sm whitespace-pre-wrap">{message.text}</p>
-                ) : (
-                  <div className="text-sm">
-                    <MarkdownRenderer content={message.text} />
-                  </div>
-                )}
-                <p className={`text-xs mt-2 ${getTimestampStyle(message.type, message.isUser)}`}>
-                  {message.timestamp.toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
-                </p>
-              </div>
-            </div>
+        {isLoadingHistory ? (
+          <div className="flex justify-center items-center h-full">
+            <div className="text-gray-500">Loading chat history...</div>
           </div>
-        ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="flex items-start gap-3 max-w-[85%]">
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center">
-                <Bot className="w-5 h-5" />
-              </div>
-              <div className="bg-gray-100 text-gray-800 rounded-2xl rounded-bl-none px-4 py-3">
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+        ) : (
+          <>
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`flex items-start gap-3 max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'
+                    }`}
+                >
+                  <div
+                    className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${message.isUser
+                        ? 'bg-indigo-100 text-indigo-600'
+                        : 'bg-gray-100 text-gray-600'
+                      }`}
+                  >
+                    {message.isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
+                  </div>
+                  <div
+                    className={`px-4 py-3 rounded-2xl ${getMessageStyle(message.type, message.isUser)}`}
+                  >
+                    {message.isUser ? (
+                      <p className="text-sm whitespace-pre-wrap">{message.text}</p>
+                    ) : (
+                      <div className="text-sm">
+                        <MarkdownRenderer content={message.text} />
+                      </div>
+                    )}
+                    <p className={`text-xs mt-2 ${getTimestampStyle(message.type, message.isUser)}`}>
+                      {message.timestamp.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            ))}
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="flex items-start gap-3 max-w-[85%]">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center">
+                    <Bot className="w-5 h-5" />
+                  </div>
+                  <div className="bg-gray-100 text-gray-800 rounded-2xl rounded-bl-none px-4 py-3">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
+      {/* Input - UPDATED disabled states */}
       <div className="p-4 border-t border-gray-200">
         <div className="flex gap-2">
           <textarea
@@ -348,11 +483,11 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             }
             className="flex-1 border border-gray-300 rounded-lg px-3 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             rows={2}
-            disabled={isLoading}
+            disabled={isLoading || isLoadingHistory || !session} 
           />
           <button
             onClick={handleSendMessage}
-            disabled={!inputText.trim() || isLoading || !session}
+            disabled={!inputText.trim() || isLoading || !session || isLoadingHistory} // UPDATED
             className="bg-indigo-600 text-white p-3 rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center self-end"
             aria-label="Send message"
           >

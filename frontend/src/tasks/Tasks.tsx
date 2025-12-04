@@ -218,16 +218,6 @@ export default function Tasks() {
 
   return (
     <div className="p-4 max-w-lg mx-auto">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-2xl font-bold">Your Tasks</h2>
-        <button
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-          onClick={() => setShowModal(true)}
-        >
-          Create Task
-        </button>
-      </div>
-
       {errorMessage && (
         <p className="mb-3 text-sm text-red-500">{errorMessage}</p>
       )}

@@ -219,7 +219,14 @@ private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> 
     try {
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      return response.text().trim();
+      let text = response.text().trim();
+
+      // Clean up any markdown or quotes that might appear
+      text = text.replace(/^["']|["']$/g, ''); // Remove surrounding quotes
+      text = text.replace(/```[\s\S]*?```/g, ''); // Remove code blocks
+      text = text.trim();
+
+      return text;
     } catch (error) {
       console.error('Error generating natural clarification:', error);
       // Fallback to simple question
