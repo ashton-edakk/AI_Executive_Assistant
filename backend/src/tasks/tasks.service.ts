@@ -12,7 +12,7 @@ interface CreateTaskData {
   status?: 'todo' | 'in_progress' | 'done';
 }
 
-interface Task {
+export interface Task {
   id: string;
   user_id: string;
   title: string;

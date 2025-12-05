@@ -80,7 +80,21 @@ export class GeminiService {
       'set a task', 'add to my tasks', 'i have to'
     ];
     const lowerMessage = message.toLowerCase();
+    // Don't treat planning requests as task creation
+    if (this.looksLikePlanningRequest(lowerMessage)) {
+      return false;
+    }
     return taskKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  looksLikePlanningRequest(message: string): boolean {
+    const planningKeywords = [
+      'plan my day', 'plan today', 'schedule my day', 'what should i work on',
+      'help me plan', 'organize my tasks', 'prioritize my tasks',
+      'what\'s my plan', 'show my schedule', 'daily plan'
+    ];
+    const lowerMessage = message.toLowerCase();
+    return planningKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
 private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> {

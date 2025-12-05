@@ -14,6 +14,7 @@ import { PlanningController } from './planning.controller';
 // Gemini + task helpers (MuhdT branch)
 import { GeminiService } from './gemini/gemini.service';
 import { GeminiController } from './gemini/gemini.controller';
+import { ChatController } from './gemini/chat.controller';
 import { AuthService } from './auth/auth.service';
 import { TasksService } from './tasks/tasks.service';
 
@@ -21,6 +22,9 @@ import { TasksService } from './tasks/tasks.service';
 import { GoogleAuthController } from './auth/google-auth.controller';
 import { GoogleAuthService } from './auth/google-auth.service';
 import { SupabaseAuthGuard } from './auth/supabase.guard';
+
+// Import PlannerService from PlanningModule (exported)
+import { PlannerService } from './planning/services/planner.service';
 
 /**
  * Root NestJS module.
@@ -43,6 +47,7 @@ import { SupabaseAuthGuard } from './auth/supabase.guard';
     AppController,
     CalendarController,
     GeminiController,
+    ChatController,
     PlanningController,
     GoogleAuthController,
   ],

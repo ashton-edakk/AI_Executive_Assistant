@@ -4,6 +4,9 @@ import { X, Send, Bot, User, Trash2, Mic, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useSupabase } from '../context/SupabaseSessionContext';
 
+// Backend API URL - use environment variable or fallback to localhost
+const API_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:8080';
+
 interface Message {
   id: number;
   text: string;
@@ -308,10 +311,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           : undefined,
       };
 
-      const response = await fetch('/api/chat', {
+      // Get the access token from the session for authenticated API calls
+      const accessToken = session?.access_token;
+      
+      const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify(payload),
       });

@@ -14,10 +14,13 @@ async function bootstrap() {
   app.enableCors({
     origin: [
       'http://localhost:5173',
-      'https://ai-executive-assistant-frontend.pages.dev', // your Pages URL
+      'http://localhost:8080',
+      'https://ai-executive-assistant-frontend.pages.dev', // Cloudflare Pages URL
+      'https://ai-executive-assistant-1o1t.onrender.com',  // Render backend URL
     ],
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
 

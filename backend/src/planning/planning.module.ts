@@ -19,7 +19,8 @@ import { InsightsController } from './insights.controller';
 @Module({
   imports: [DbModule, CalendarModule],
   controllers: [PlanningController, ExecController, InsightsController],
-  providers: [PlannerService, ScoringService, PlacementService, FreeTimeService, TaskBlocksRepo, TasksRepo, CalendarRepo, ExecService, SessionsRepo, InsightsRepo, InsightsService,],
+  providers: [PlannerService, ScoringService, PlacementService, FreeTimeService, TaskBlocksRepo, TasksRepo, CalendarRepo, ExecService, SessionsRepo, InsightsRepo, InsightsService],
+  exports: [PlannerService, ExecService, InsightsService], // Export services for use in other modules
 })
 export class PlanningModule {}
 
