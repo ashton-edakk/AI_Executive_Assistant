@@ -197,11 +197,12 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      // Build the full transcript from all results
+      // Build transcript from new/changed results only (using resultIndex)
       let finalTranscript = '';
       let interimTranscript = '';
       
-      for (let i = 0; i < event.results.length; i++) {
+      // resultIndex tells us which results are new/changed since last event
+      for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
           finalTranscript += result[0].transcript;
@@ -210,8 +211,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         }
       }
       
-      // Use final if available, otherwise show interim
-      const currentTranscript = (finalTranscript || interimTranscript).trim();
+      // Combine final + interim (final words plus words still being spoken)
+      const currentTranscript = (finalTranscript + interimTranscript).trim();
       if (!currentTranscript) return;
 
       // Replace (not append) the voice portion of the text
