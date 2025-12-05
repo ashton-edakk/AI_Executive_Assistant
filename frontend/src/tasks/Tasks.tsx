@@ -102,10 +102,40 @@ export default function Tasks() {
     }
   };
 
-  // --- Delete task (and related sessions/blocks first) ---
+  // --- Delete task (and related sessions/blocks/calendar events) ---
   const deleteTask = async (id: string) => {
     try {
-      // First, delete related task_sessions (foreign key constraint)
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+
+      // First, get any Google Calendar event IDs from task_blocks
+      const { data: blocks } = await supabase
+        .from('task_blocks')
+        .select('google_event_id')
+        .eq('task_id', id)
+        .not('google_event_id', 'is', null);
+
+      // Delete Google Calendar events if any exist
+      if (blocks && blocks.length > 0) {
+        for (const block of blocks) {
+          if (block.google_event_id) {
+            try {
+              await fetch(`${API_URL}/calendar/events/${encodeURIComponent(block.google_event_id)}`, {
+                method: 'DELETE',
+                headers: {
+                  ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
+                },
+              });
+              console.log('Deleted calendar event:', block.google_event_id);
+            } catch (calErr) {
+              console.error('Failed to delete calendar event:', calErr);
+              // Continue anyway - event might already be deleted
+            }
+          }
+        }
+      }
+
+      // Delete related task_sessions (foreign key constraint)
       const { error: sessionsError } = await supabase
         .from('task_sessions')
         .delete()
@@ -116,7 +146,7 @@ export default function Tasks() {
         // Continue anyway - might not have sessions
       }
 
-      // Then, delete related task_blocks
+      // Delete related task_blocks
       const { error: blocksError } = await supabase
         .from('task_blocks')
         .delete()

@@ -593,20 +593,21 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             disabled={isLoading || isLoadingHistory || !session}
           />
 
-          {isSpeechSupported && (
-            <button
-              type="button"
-              onClick={handleVoiceToggle}
-              disabled={isLoading || isLoadingHistory || !session}
-              className={`p-3 rounded-lg h-[42px] w-[42px] flex items-center justify-center self-end border ${isListening
-                ? 'bg-red-100 border-red-400 text-red-600'
-                : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
-                } transition-colors`}
-              aria-label={isListening ? 'Stop listening' : 'Start voice input'}
-            >
-              {isListening ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleVoiceToggle}
+            disabled={isLoading || isLoadingHistory || !session}
+            className={`p-3 rounded-lg h-[42px] w-[42px] flex items-center justify-center self-end border ${isListening
+              ? 'bg-red-100 border-red-400 text-red-600'
+              : isSpeechSupported 
+                ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+              } transition-colors`}
+            aria-label={isListening ? 'Stop listening' : isSpeechSupported ? 'Start voice input' : 'Voice not supported in this browser'}
+            title={isSpeechSupported ? (isListening ? 'Stop listening' : 'Click to speak') : 'Voice input not supported in this browser. Try Chrome.'}
+          >
+            {isListening ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          </button>
 
           <button
             onClick={handleSendMessage}

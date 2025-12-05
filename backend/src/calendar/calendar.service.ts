@@ -162,6 +162,43 @@ export class CalendarService {
   }
 
   /**
+   * Delete a Google Calendar event by its event ID.
+   */
+  async deleteEvent(user: CalendarUser, googleEventId: string) {
+    // DEV fake calendar switch (for local testing without Google)
+    if (process.env.DEV_FAKE_CALENDAR === '1') {
+      return { deleted: true, dev: true };
+    }
+
+    const token = await this.getAccessTokenForUser(user);
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(googleEventId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    // 204 No Content = success, 404 = already deleted (treat as success)
+    if (!res.ok && res.status !== 404) {
+      const err = await res.text();
+      throw new HttpException(err || 'Failed to delete event', res.status);
+    }
+
+    // Also remove from our local calendar_events table
+    try {
+      await this.sb.from('calendar_events').delete().eq('google_event_id', googleEventId);
+    } catch (e) {
+      console.error('Failed to remove event from calendar_events table', e);
+    }
+
+    return { deleted: true, googleEventId };
+  }
+
+  /**
    * Sync Google events into the `calendar_events` table.
    * Since the table has no user_id column, we:
    *   - clear existing rows
