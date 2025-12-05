@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Play, Square, CheckCircle, Clock, Trash2, Plus } from 'lucide-react';
+import { Play, Square, CheckCircle, Clock, Trash2, MessageCircle } from 'lucide-react';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -28,21 +28,6 @@ type Task = TaskRow;
 // --- TASKS COMPONENT ---
 export default function Tasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [showModal, setShowModal] = useState(false);
-
-  // structured entry
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [priority, setPriority] = useState<'low' | 'med' | 'high'>('med');
-  const [estMinutes, setEstMinutes] = useState<number | ''>('');
-
-  // plain text entry
-  const [rawTaskInput, setRawTaskInput] = useState('');
-
-  const [activeTab, setActiveTab] = useState<'structured' | 'plain'>(
-    'structured',
-  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Execution tracking state
@@ -86,121 +71,6 @@ export default function Tasks() {
     } catch (err: any) {
       console.error('fetchTasks exception', err);
       setErrorMessage('Failed to fetch tasks.');
-    }
-  };
-
-  // --- Structured create ---
-  const createTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session || !session.user) {
-        setErrorMessage('You must be signed in to create tasks.');
-        return;
-      }
-
-      const { error } = await supabase.from('tasks').insert({
-        user_id: session.user.id,
-        title,
-        notes: notes || null,
-        due_date: dueDate || null,
-        priority,
-        status: 'todo',
-        est_minutes: estMinutes === '' ? null : estMinutes,
-      });
-
-      if (error) {
-        console.error('createTask error', error);
-        setErrorMessage(error.message);
-        return;
-      }
-
-      // reset & refresh
-      setTitle('');
-      setNotes('');
-      setDueDate('');
-      setPriority('med');
-      setEstMinutes('');
-      setShowModal(false);
-      await fetchTasks();
-    } catch (err: any) {
-      console.error('createTask exception', err);
-      setErrorMessage('Failed to create task.');
-    }
-  };
-
-  // --- Plain text create (uses AI to parse) ---
-  const [isParsingTask, setIsParsingTask] = useState(false);
-  
-  const savePlainTextTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!rawTaskInput.trim()) return;
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session || !session.user) {
-        setErrorMessage('You must be signed in to create tasks.');
-        return;
-      }
-
-      setIsParsingTask(true);
-      
-      // Use the chat API to parse and create the task
-      const accessToken = session.access_token;
-      const response = await fetch(`${API_URL}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          message: `Create a task: ${rawTaskInput}`,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to parse task');
-      }
-
-      const result = await response.json();
-      
-      if (result.task_created) {
-        setRawTaskInput('');
-        setShowModal(false);
-        await fetchTasks();
-        setErrorMessage(null);
-      } else if (result.needs_clarification) {
-        setErrorMessage(`AI needs more info: ${result.response}`);
-      } else {
-        // Fallback: create basic task if AI doesn't recognize it as task creation
-        const { error } = await supabase.from('tasks').insert({
-          user_id: session.user.id,
-          title: rawTaskInput,
-          priority: 'med',
-          status: 'todo',
-        });
-
-        if (error) {
-          throw error;
-        }
-        
-        setRawTaskInput('');
-        setShowModal(false);
-        await fetchTasks();
-      }
-    } catch (err: any) {
-      console.error('savePlainTextTask exception', err);
-      setErrorMessage(err.message || 'Failed to save task.');
-    } finally {
-      setIsParsingTask(false);
     }
   };
 
@@ -419,20 +289,18 @@ export default function Tasks() {
         <p className="mb-3 text-sm text-red-500">{errorMessage}</p>
       )}
 
-      {/* Add Task Button */}
-      <button
-        onClick={() => setShowModal(true)}
-        className="w-full mb-4 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold transition-colors"
-      >
-        <Plus className="w-5 h-5" />
-        Add Task
-      </button>
-
       {/* Task List */}
       <ul className="space-y-3">
         {tasks.length === 0 && (
-          <li className="text-center py-8 text-gray-400">
-            No tasks yet. Add one to get started!
+          <li className="text-center py-8">
+            <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500 font-medium mb-2">No tasks yet</p>
+            <p className="text-gray-400 text-sm">
+              Use the chat assistant to create tasks!
+            </p>
+            <p className="text-gray-400 text-xs mt-2 italic">
+              Try: "Create a task to study for my exam by Friday, 2 hours, high priority"
+            </p>
           </li>
         )}
         {tasks.map((task) => {
@@ -538,164 +406,6 @@ export default function Tasks() {
           );
         })}
       </ul>
-
-      {/* Modal Form */}
-      {showModal && (
-        <div className="fixed inset-0 flex items-center justify-center backdrop-blur-sm bg-black/30 z-50">
-          <div className="bg-white p-6 rounded-xl w-full max-w-md relative">
-            <h3 className="text-xl font-bold mb-4">Create Task</h3>
-
-            {/* Tab Switcher */}
-            <div className="flex mb-4 border-b">
-              <button
-                className={`flex-1 py-2 text-center ${activeTab === 'structured'
-                    ? 'border-b-2 border-blue-500 font-semibold'
-                    : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                onClick={() => setActiveTab('structured')}
-              >
-                Structured Entry
-              </button>
-              <button
-                className={`flex-1 py-2 text-center ${activeTab === 'plain'
-                    ? 'border-b-2 border-blue-500 font-semibold'
-                    : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                onClick={() => setActiveTab('plain')}
-              >
-                Plain Text Entry
-              </button>
-            </div>
-
-            {/* Structured Entry Form */}
-            {activeTab === 'structured' && (
-              <form onSubmit={createTask} className="space-y-3">
-                <div>
-                  <label className="block mb-1 font-semibold">Title</label>
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="border p-2 w-full rounded"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1 font-semibold">Notes</label>
-                  <textarea
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    className="border p-2 w-full rounded"
-                    rows={2}
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1 font-semibold">
-                    Estimated Minutes
-                  </label>
-                  <input
-                    type="number"
-                    value={estMinutes}
-                    onChange={(e) =>
-                      setEstMinutes(
-                        e.target.value === ''
-                          ? ''
-                          : Number(e.target.value),
-                      )
-                    }
-                    className="border p-2 w-full rounded"
-                    placeholder="e.g. 120"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1 font-semibold">
-                    Due Date (Date only)
-                  </label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="border p-2 w-full rounded"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1 font-semibold">Priority</label>
-                  <select
-                    value={priority}
-                    onChange={(e) =>
-                      setPriority(e.target.value as 'low' | 'med' | 'high')
-                    }
-                    className="border p-2 w-full rounded"
-                  >
-                    <option value="low">Low</option>
-                    <option value="med">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </div>
-                <div className="flex justify-end gap-2 mt-4">
-                  <button
-                    type="button"
-                    className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400"
-                    onClick={() => setShowModal(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded bg-blue-500 text-white hover:bg-blue-600"
-                  >
-                    Create
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* Plain Text Entry Form */}
-            {activeTab === 'plain' && (
-              <form onSubmit={savePlainTextTask} className="space-y-3">
-                <div>
-                  <label className="block mb-1 font-semibold">
-                    Task Description
-                  </label>
-                  <textarea
-                    value={rawTaskInput}
-                    onChange={(e) => setRawTaskInput(e.target.value)}
-                    className="border p-2 w-full rounded"
-                    rows={5}
-                    placeholder='e.g. "Prep for the CS 484 exam by Friday this week, high priority"'
-                    required
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 mt-4">
-                  <button
-                    type="button"
-                    className="px-4 py-2 rounded bg-gray-300 hover:bg-gray-400"
-                    onClick={() => setShowModal(false)}
-                    disabled={isParsingTask}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2"
-                    disabled={isParsingTask}
-                  >
-                    {isParsingTask ? (
-                      <>
-                        <span className="animate-spin">⏳</span>
-                        Parsing with AI...
-                      </>
-                    ) : (
-                      'Save Task (AI Parsed)'
-                    )}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
