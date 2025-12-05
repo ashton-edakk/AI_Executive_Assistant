@@ -53,17 +53,6 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     timestamp: new Date(),
   });
 
-  const addAssistantMessage = (text: string, type?: Message['type']): void => {
-    const newMessage: Message = {
-      id: Date.now(),
-      text,
-      isUser: false,
-      timestamp: new Date(),
-      type,
-    };
-    setMessages(prev => [...prev, newMessage]);
-  };
-
   const formatTaskCreatedMessage = (aiResponse: any): string => {
     if (!aiResponse?.parsed_task) return aiResponse?.response || "I created a task for you.";
 
@@ -543,14 +532,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
                 >
                   <div
                     className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${msg.isUser
-                        ? 'bg-indigo-600 text-white rounded-br-none'
-                        : msg.type === 'task_created'
-                          ? 'bg-green-50 text-gray-900 border border-green-200 rounded-bl-none'
-                          : msg.type === 'needs_clarification'
-                            ? 'bg-yellow-50 text-gray-900 border border-yellow-200 rounded-bl-none'
-                            : msg.type === 'error'
-                              ? 'bg-red-50 text-gray-900 border border-red-200 rounded-bl-none'
-                              : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
+                      ? 'bg-indigo-600 text-white rounded-br-none'
+                      : msg.type === 'task_created'
+                        ? 'bg-green-50 text-gray-900 border border-green-200 rounded-bl-none'
+                        : msg.type === 'needs_clarification'
+                          ? 'bg-yellow-50 text-gray-900 border border-yellow-200 rounded-bl-none'
+                          : msg.type === 'error'
+                            ? 'bg-red-50 text-gray-900 border border-red-200 rounded-bl-none'
+                            : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
                       }`}
                   >
                     <div className="flex items-center gap-2 mb-1">
@@ -603,8 +592,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
               onClick={handleVoiceToggle}
               disabled={isLoading || isLoadingHistory || !session}
               className={`p-3 rounded-lg h-[42px] w-[42px] flex items-center justify-center self-end border ${isListening
-                  ? 'bg-red-100 border-red-400 text-red-600'
-                  : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                ? 'bg-red-100 border-red-400 text-red-600'
+                : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
                 } transition-colors`}
               aria-label={isListening ? 'Stop listening' : 'Start voice input'}
             >
