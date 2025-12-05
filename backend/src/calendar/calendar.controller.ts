@@ -4,7 +4,7 @@ import { SupabaseAuthGuard } from '../auth/supabase.guard';
 
 @Controller('calendar')
 export class CalendarController {
-  constructor(private readonly calendarService: CalendarService) {}
+  constructor(private readonly calendarService: CalendarService) { }
 
   // Only allow authenticated users
   @UseGuards(SupabaseAuthGuard)

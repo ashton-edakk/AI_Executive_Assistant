@@ -232,9 +232,8 @@ export default function Tasks() {
               className="flex justify-between items-center p-2 border rounded"
             >
               <span
-                className={`cursor-pointer ${
-                  isCompleted ? 'line-through text-gray-500' : ''
-                }`}
+                className={`cursor-pointer ${isCompleted ? 'line-through text-gray-500' : ''
+                  }`}
                 onClick={() => toggleTask(task)}
               >
                 {task.title}{' '}
@@ -264,21 +263,19 @@ export default function Tasks() {
             {/* Tab Switcher */}
             <div className="flex mb-4 border-b">
               <button
-                className={`flex-1 py-2 text-center ${
-                  activeTab === 'structured'
+                className={`flex-1 py-2 text-center ${activeTab === 'structured'
                     ? 'border-b-2 border-blue-500 font-semibold'
                     : 'text-gray-500 hover:text-gray-700'
-                }`}
+                  }`}
                 onClick={() => setActiveTab('structured')}
               >
                 Structured Entry
               </button>
               <button
-                className={`flex-1 py-2 text-center ${
-                  activeTab === 'plain'
+                className={`flex-1 py-2 text-center ${activeTab === 'plain'
                     ? 'border-b-2 border-blue-500 font-semibold'
                     : 'text-gray-500 hover:text-gray-700'
-                }`}
+                  }`}
                 onClick={() => setActiveTab('plain')}
               >
                 Plain Text Entry

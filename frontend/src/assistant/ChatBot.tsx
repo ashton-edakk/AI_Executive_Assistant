@@ -1,6 +1,6 @@
 // components/ChatBot.tsx
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, Trash2 } from 'lucide-react'; 
+import { X, Send, Bot, User, Trash2, Mic, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useSupabase } from '../context/SupabaseSessionContext';
 
@@ -19,7 +19,7 @@ interface ChatBotProps {
 
 const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
   const { session, supabase } = useSupabase();
-  
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -29,6 +29,10 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     partialTask: any;
     originalMessage: string;
   }>({ active: false, partialTask: null, originalMessage: '' });
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const [isSpeechSupported, setIsSpeechSupported] = useState<boolean>(false);
+  const recognitionRef = useRef<any | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = (): void => {
@@ -37,18 +41,80 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
   const getWelcomeMessage = (): Message => ({
     id: 1,
-    text: "Hello! I'm your AI Executive Assistant. I can help you manage tasks and schedule. You can say things like:\n\n- \"Create a task to finish the report by Friday\"\n- \"Add 'prepare presentation slides' as high priority\"\n- \"Remind me to call John tomorrow\"",
+    text: "Hello! I'm your AI Executive Assistant. I can help you plan your tasks, schedule your day, and optimize your time.\n\nTry asking me things like:\n- \"Help me plan my day\"\n- \"Create a task to study for my exam on Friday\"\n- \"Add a task to finish my CS homework\"\n- \"Mark my 'Prepare slides' task as high priority\"\n- \"Remind me to call John tomorrow\"",
     isUser: false,
     timestamp: new Date(),
   });
 
   const getSignInWelcomeMessage = (): Message => ({
     id: 1,
-    text: "🔐 Please sign in to use the AI Assistant. The chat feature is only available for signed-in users.",
+    text: "🔐 Please sign in to use the AI Executive Assistant.\n\nOnce you're signed in, I can:\n- Remember your tasks\n- Help you plan your schedule\n- Create and organize tasks for you\n\nUse the sign in button in the top right corner to get started.",
     isUser: false,
     timestamp: new Date(),
-    type: 'info'
   });
+
+  const addAssistantMessage = (text: string, type?: Message['type']): void => {
+    const newMessage: Message = {
+      id: Date.now(),
+      text,
+      isUser: false,
+      timestamp: new Date(),
+      type,
+    };
+    setMessages(prev => [...prev, newMessage]);
+  };
+
+  const formatTaskCreatedMessage = (aiResponse: any): string => {
+    if (!aiResponse?.parsed_task) return aiResponse?.response || "I created a task for you.";
+
+    const { title, due_date, est_minutes, priority, notes } = aiResponse.parsed_task;
+
+    let message = `✅ I created this task for you:\n\n**${title}**\n`;
+
+    if (due_date) {
+      message += `• **Due:** ${due_date}\n`;
+    }
+
+    if (est_minutes) {
+      message += `• **Estimated time:** ${est_minutes} minutes\n`;
+    }
+
+    if (priority) {
+      const priorityLabel =
+        priority === 'high' ? 'High 🔴' :
+          priority === 'med' ? 'Medium 🟡' :
+            priority === 'low' ? 'Low 🟢' :
+              priority;
+      message += `• **Priority:** ${priorityLabel}\n`;
+    }
+
+    if (notes) {
+      message += `\n📝 **Notes:**\n${notes}\n`;
+    }
+
+    message += `\nYou can view or edit this task on your Tasks page.`;
+
+    return message;
+  };
+
+  const formatClarificationRequest = (aiResponse: any): string => {
+    if (!aiResponse?.clarification_prompt) {
+      return "I need a bit more information to create this task. Can you clarify what you mean?";
+    }
+
+    let message = `🤔 I need a bit more information:\n\n${aiResponse.clarification_prompt}\n`;
+
+    if (aiResponse.missing_fields && aiResponse.missing_fields.length > 0) {
+      message += `\nMissing details:\n`;
+      aiResponse.missing_fields.forEach((field: string) => {
+        message += `- ${field}\n`;
+      });
+    }
+
+    message += `\nPlease reply with the missing information in one message.`;
+
+    return message;
+  };
 
   const loadChatHistory = async (): Promise<void> => {
     if (!session?.user?.id) {
@@ -58,88 +124,36 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     }
 
     setIsLoadingHistory(true);
-    
+
     try {
       const { data: chatData, error } = await supabase
         .from('user_chats')
         .select('messages')
         .eq('user_id', session.user.id)
-        .maybeSingle();
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-      if (error && error.code !== 'PGRST116') {
+      if (error) {
         console.error('Error loading chat history:', error);
-        throw error;
-      }
-
-      if (chatData?.messages && Array.isArray(chatData.messages)) {
+        setMessages([getWelcomeMessage()]);
+      } else if (chatData?.messages?.length) {
         const loadedMessages: Message[] = chatData.messages.map((msg: any, index: number) => ({
-          id: index,
-          text: msg.content,
-          isUser: msg.role === 'user',
-          timestamp: new Date(msg.timestamp),
-          type: msg.type
+          id: msg.id || index + 1,
+          text: msg.text,
+          isUser: msg.isUser,
+          timestamp: msg.timestamp ? new Date(msg.timestamp) : new Date(),
+          type: msg.type,
         }));
-
-        if (loadedMessages.length === 0) {
-          setMessages([getWelcomeMessage()]);
-        } else {
-          setMessages(loadedMessages);
-        }
+        setMessages(loadedMessages);
       } else {
-        const welcomeMessage = getWelcomeMessage();
-        setMessages([welcomeMessage]);
-        await saveMessagesToDB([welcomeMessage]);
+        setMessages([getWelcomeMessage()]);
       }
     } catch (error) {
-      console.error('Failed to load chat history:', error);
+      console.error('Unexpected error loading chat history:', error);
       setMessages([getWelcomeMessage()]);
     } finally {
       setIsLoadingHistory(false);
-    }
-  };
-
-  const saveMessagesToDB = async (messagesToSave: Message[]): Promise<boolean> => {
-    if (!session?.user?.id) return false;
-
-    try {
-      const storedMessages = messagesToSave.map(msg => ({
-        role: msg.isUser ? 'user' : 'assistant',
-        content: msg.text,
-        timestamp: msg.timestamp.toISOString(),
-        type: msg.type,
-      }));
-
-      const { error } = await supabase
-        .from('user_chats')
-        .upsert({
-          user_id: session.user.id,
-          messages: storedMessages,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id'
-        });
-
-      if (error) throw error;
-      return true;
-    } catch (error) {
-      console.error('Failed to save chat to database:', error);
-      try {
-        localStorage.setItem(`chat_backup_${session.user.id}`, JSON.stringify(messagesToSave));
-      } catch {}
-      return false;
-    }
-  };
-
-  const clearChatHistory = async (): Promise<void> => {
-    if (!session?.user?.id || !confirm('Clear all chat history?')) return;
-
-    try {
-      const welcomeMessage = getWelcomeMessage();
-      setMessages([welcomeMessage]);
-      await saveMessagesToDB([welcomeMessage]);
-      localStorage.removeItem(`chat_backup_${session.user.id}`);
-    } catch (error) {
-      console.error('Failed to clear chat history:', error);
     }
   };
 
@@ -152,6 +166,116 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (SpeechRecognitionCtor) {
+      setIsSpeechSupported(true);
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
+
+  const initRecognition = () => {
+    if (recognitionRef.current) return;
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      console.warn('SpeechRecognition is not supported in this browser.');
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      transcript = transcript.trim();
+      if (!transcript) return;
+
+      setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+  };
+
+  const handleVoiceToggle = () => {
+    if (!isSpeechSupported) {
+      alert('Speech recognition is not supported in this browser.');
+      return;
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+
+    initRecognition();
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error('Failed to start speech recognition:', err);
+        setIsListening(false);
+      }
+    }
+  };
+
+  const saveChatHistory = async (updatedMessages: Message[]): Promise<void> => {
+    if (!session?.user?.id) return;
+
+    try {
+      const messagesToSave = updatedMessages.map(msg => ({
+        id: msg.id,
+        text: msg.text,
+        isUser: msg.isUser,
+        timestamp: msg.timestamp.toISOString(),
+        type: msg.type,
+      }));
+
+      const { error } = await supabase
+        .from('user_chats')
+        .upsert({
+          user_id: session.user.id,
+          messages: messagesToSave,
+        }, { onConflict: 'user_id' });
+
+      if (error) {
+        console.error('Error saving chat history:', error);
+      }
+    } catch (error) {
+      console.error('Unexpected error saving chat history:', error);
+    }
+  };
 
   const handleSendMessage = async (): Promise<void> => {
     if (!session) {
@@ -175,113 +299,137 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       timestamp: new Date(),
     };
 
-    // Create updated messages array with user message
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-
-    const currentInput = inputText;
+    setMessages(prev => [...prev, userMessage]);
     setInputText('');
     setIsLoading(true);
 
     try {
-      // If we're in clarification mode, just send the clarification as a regular message
-      // The backend will handle it through the same /api/chat endpoint
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
+      const payload: any = {
+        message: inputText,
+        context: messages.slice(-10).map(msg => ({
+          role: msg.isUser ? 'user' : 'assistant',
+          content: msg.text,
+        })),
+        clarification_state: clarificationState.active
+          ? {
+            active: true,
+            partial_task: clarificationState.partialTask,
+            original_message: clarificationState.originalMessage,
+          }
+          : undefined,
       };
 
-      // Add authorization header if user is signed in
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      } else {
-        console.log('User not signed in, proceeding without auth token.');
-      }
-
-      const requestBody: any = {
-        message: currentInput,
-      };
-
-      if (clarificationState.active) {
-        console.log('Sending clarification response to backend:', currentInput);
-        requestBody.context = 'clarification';
-        requestBody.partialTask = clarificationState.partialTask;
-      }
-
-      const API_BASE_URL =
-        import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-
-      const response = await fetch(`${API_BASE_URL}/api/chat`, {
+      const response = await fetch('/api/chat', {
         method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        throw new Error(`Chat API returned status ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('ChatBot received:', data);
 
-      let messageType: Message['type'];
-      if (data.task_created) {
-        messageType = 'task_created';
+      if (data.ready_to_create && data.task_created) {
+        const formattedMessage = formatTaskCreatedMessage(data);
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: formattedMessage,
+          isUser: false,
+          timestamp: new Date(),
+          type: 'task_created',
+        };
+
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
+
+        setClarificationState({
+          active: false,
+          partialTask: null,
+          originalMessage: '',
+        });
+      } else if (data.ready_to_create && !data.task_created) {
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: data.response || "I understood your task but couldn't save it. Please try again.",
+          isUser: false,
+          timestamp: new Date(),
+          type: 'error',
+        };
+
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
+
+        setClarificationState({
+          active: false,
+          partialTask: null,
+          originalMessage: '',
+        });
       } else if (data.needs_clarification) {
-        messageType = 'needs_clarification';
-      } else if (data.ready_to_create) {
-        messageType = !session ? 'info' : 'task_created';
-      }
+        const formattedMessage = formatClarificationRequest(data);
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: formattedMessage,
+          isUser: false,
+          timestamp: new Date(),
+          type: 'needs_clarification',
+        };
 
-      let responseText = data.response;
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
 
-      // If task is ready but user not signed in, add sign in prompt
-      if (data.ready_to_create && !session) {
-        responseText += "\n\n🔐 Please sign in to save this task to your list.";
-      }
-
-      const botMessage: Message = {
-        id: Date.now() + 1,
-        text: responseText,
-        isUser: false,
-        timestamp: new Date(),
-        type: messageType,
-      };
-
-      // Create final messages array with bot response
-      const finalMessages = [...updatedMessages, botMessage];
-      setMessages(finalMessages);
-
-      // Save to database after receiving bot response
-      await saveMessagesToDB(finalMessages);
-
-      if (data.needs_clarification) {
         setClarificationState({
           active: true,
           partialTask: data.partial_task,
-          originalMessage: currentInput
+          originalMessage: inputText,
         });
       } else {
-        // Reset clarification state if we're not in clarification mode anymore
-        setClarificationState({ active: false, partialTask: null, originalMessage: '' });
-      }
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: data.response || "I'm not sure how to respond to that.",
+          isUser: false,
+          timestamp: new Date(),
+        };
 
-    } catch (error) {
-      console.error('Chat error:', error);
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
+
+        setClarificationState({
+          active: false,
+          partialTask: null,
+          originalMessage: '',
+        });
+      }
+    } catch (error: any) {
+      console.error('Error in chat interaction:', error);
       const errorMessage: Message = {
         id: Date.now() + 1,
-        text: "I'm sorry, I'm having trouble connecting right now. Please try again later.",
+        text: "Sorry, I ran into an error processing your request. Please try again.",
         isUser: false,
         timestamp: new Date(),
         type: 'error',
       };
-      
-      const finalMessages = [...messages, errorMessage];
-      setMessages(finalMessages);
-      
-      // Save error message too
-      await saveMessagesToDB(finalMessages);
-      
-      setClarificationState({ active: false, partialTask: null, originalMessage: '' });
+
+      setMessages(prev => {
+        const updated = [...prev, errorMessage];
+        saveChatHistory(updated);
+        return updated;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -301,18 +449,17 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         components={{
           h1: ({ children }) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900">{children}</h1>,
           h2: ({ children }) => <h2 className="text-md font-semibold mt-3 mb-2 text-gray-800">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-700">{children}</h3>,
-          p: ({ children }) => <p className="mb-2 leading-relaxed">{children}</p>,
-          ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-          ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-800">{children}</h3>,
+          p: ({ children }) => <p className="text-sm text-gray-800 leading-relaxed mb-2">{children}</p>,
+          ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-1 text-sm text-gray-800">{children}</ul>,
+          ol: ({ children }) => <ul className="list-decimal pl-5 mb-2 space-y-1 text-sm text-gray-800">{children}</ul>,
+          li: ({ children }) => <li className="mb-1">{children}</li>,
           strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
-          em: ({ children }) => <em className="italic text-gray-700">{children}</em>,
-          code: ({ children }) => <code className="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">{children}</code>,
-          blockquote: ({ children }) => (
-            <blockquote className="border-l-4 border-indigo-300 pl-3 py-1 my-2 text-gray-600">
+          em: ({ children }) => <em className="italic">{children}</em>,
+          code: ({ children }) => (
+            <code className="px-1 py-0.5 rounded bg-gray-100 text-xs font-mono text-gray-800">
               {children}
-            </blockquote>
+            </code>
           ),
         }}
       >
@@ -321,39 +468,22 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     );
   };
 
-  const getMessageStyle = (type: Message['type'], isUser: boolean) => {
-    if (isUser) {
-      return 'bg-indigo-600 text-white rounded-br-none';
-    }
+  const clearChatHistory = async (): Promise<void> => {
+    if (!session?.user?.id) return;
 
-    switch (type) {
-      case 'task_created':
-        return 'bg-green-100 text-green-800 rounded-bl-none border border-green-200';
-      case 'needs_clarification':
-        return 'bg-yellow-100 text-yellow-800 rounded-bl-none border border-yellow-200';
-      case 'error':
-        return 'bg-red-100 text-red-800 rounded-bl-none border border-red-200';
-      case 'info':
-        return 'bg-blue-100 text-blue-800 rounded-bl-none border border-blue-200';
-      default:
-        return 'bg-gray-100 text-gray-800 rounded-bl-none';
-    }
-  };
+    try {
+      const { error } = await supabase
+        .from('user_chats')
+        .update({ messages: [] })
+        .eq('user_id', session.user.id);
 
-  const getTimestampStyle = (type: Message['type'], isUser: boolean) => {
-    if (isUser) return 'text-indigo-200';
+      if (error) {
+        console.error('Error clearing chat history:', error);
+      }
 
-    switch (type) {
-      case 'task_created':
-        return 'text-green-600';
-      case 'needs_clarification':
-        return 'text-yellow-600';
-      case 'error':
-        return 'text-red-600';
-      case 'info':
-        return 'text-blue-600';
-      default:
-        return 'text-gray-500';
+      setMessages([getWelcomeMessage()]);
+    } catch (error) {
+      console.error('Unexpected error clearing chat history:', error);
     }
   };
 
@@ -388,7 +518,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           )}
           <button
             onClick={onClose}
-            className="text-white hover:text-gray-200 transition-colors"
+            className="text-white hover:text-indigo-200 transition-colors"
             aria-label="Close chat"
           >
             <X className="w-5 h-5" />
@@ -396,67 +526,55 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         </div>
       </div>
 
-      {/* Messages - UPDATED with loading state */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
         {isLoadingHistory ? (
-          <div className="flex justify-center items-center h-full">
-            <div className="text-gray-500">Loading chat history...</div>
+          <div className="h-full flex items-center justify-center flex-col gap-3 text-gray-500">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
+            <p className="text-sm">Loading your chat history...</p>
           </div>
         ) : (
           <>
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
-              >
+            <div className="space-y-3">
+              {messages.map((msg) => (
                 <div
-                  className={`flex items-start gap-3 max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'
-                    }`}
+                  key={msg.id}
+                  className={`flex ${msg.isUser ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${message.isUser
-                        ? 'bg-indigo-100 text-indigo-600'
-                        : 'bg-gray-100 text-gray-600'
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${msg.isUser
+                        ? 'bg-indigo-600 text-white rounded-br-none'
+                        : msg.type === 'task_created'
+                          ? 'bg-green-50 text-gray-900 border border-green-200 rounded-bl-none'
+                          : msg.type === 'needs_clarification'
+                            ? 'bg-yellow-50 text-gray-900 border border-yellow-200 rounded-bl-none'
+                            : msg.type === 'error'
+                              ? 'bg-red-50 text-gray-900 border border-red-200 rounded-bl-none'
+                              : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
                       }`}
                   >
-                    {message.isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
-                  </div>
-                  <div
-                    className={`px-4 py-3 rounded-2xl ${getMessageStyle(message.type, message.isUser)}`}
-                  >
-                    {message.isUser ? (
-                      <p className="text-sm whitespace-pre-wrap">{message.text}</p>
-                    ) : (
-                      <div className="text-sm">
-                        <MarkdownRenderer content={message.text} />
+                    <div className="flex items-center gap-2 mb-1">
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center ${msg.isUser ? 'bg-indigo-700' : 'bg-gray-200'
+                          }`}
+                      >
+                        {msg.isUser ? (
+                          <User className="w-4 h-4 text-white" />
+                        ) : (
+                          <Bot className="w-4 h-4 text-gray-700" />
+                        )}
                       </div>
-                    )}
-                    <p className={`text-xs mt-2 ${getTimestampStyle(message.type, message.isUser)}`}>
-                      {message.timestamp.toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="flex items-start gap-3 max-w-[85%]">
-                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center">
-                    <Bot className="w-5 h-5" />
-                  </div>
-                  <div className="bg-gray-100 text-gray-800 rounded-2xl rounded-bl-none px-4 py-3">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                      <span className="text-[11px] text-gray-500">
+                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                      <MarkdownRenderer content={msg.text} />
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              ))}
+            </div>
             <div ref={messagesEndRef} />
           </>
         )}
@@ -476,28 +594,36 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             }
             className="flex-1 border border-gray-300 rounded-lg px-3 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             rows={2}
-            disabled={isLoading || isLoadingHistory || !session} 
+            disabled={isLoading || isLoadingHistory || !session}
           />
+
+          {isSpeechSupported && (
+            <button
+              type="button"
+              onClick={handleVoiceToggle}
+              disabled={isLoading || isLoadingHistory || !session}
+              className={`p-3 rounded-lg h-[42px] w-[42px] flex items-center justify-center self-end border ${isListening
+                  ? 'bg-red-100 border-red-400 text-red-600'
+                  : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                } transition-colors`}
+              aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+            >
+              {isListening ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+          )}
+
           <button
             onClick={handleSendMessage}
-            disabled={!inputText.trim() || isLoading || !session || isLoadingHistory} // UPDATED
-            className="bg-indigo-600 text-white p-3 rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center self-end"
+            disabled={!inputText.trim() || isLoading || !session || isLoadingHistory}
+            className="bg-indigo-600 text-white p-3 rounded-lg h-[42px] w-[42px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors flex items-center justify-center self-end"
             aria-label="Send message"
           >
             <Send className="w-4 h-4" />
           </button>
         </div>
         <p className="text-xs text-gray-500 mt-2 text-center">
-          {clarificationState.active
-            ? "Answer the question above to complete task creation"
-            : "Press Enter to send, Shift+Enter for new line"
-          }
+          Pro tip: Ask me to "create a task" or "help plan my day"
         </p>
-        {!session && (
-          <p className="text-xs text-yellow-600 mt-1 text-center">
-            🔐 Sign in to save tasks to your list
-          </p>
-        )}
       </div>
     </div>
   );
