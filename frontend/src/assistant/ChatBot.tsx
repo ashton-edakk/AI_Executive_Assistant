@@ -601,6 +601,26 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         )}
       </div>
 
+      {/* Quick Actions */}
+      {messages.length <= 1 && session && !isLoadingHistory && (
+        <div className="px-4 pb-2 flex flex-wrap gap-2">
+          {[
+            { text: '📋 Plan my day', action: 'Plan my day' },
+            { text: '📝 Show my tasks', action: 'Show my tasks' },
+            { text: '📊 My progress', action: 'What did I accomplish today?' },
+            { text: '❓ Help', action: 'Help' },
+          ].map((btn) => (
+            <button
+              key={btn.action}
+              onClick={() => { setInputText(btn.action); }}
+              className="text-xs px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-full hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+            >
+              {btn.text}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Input - UPDATED disabled states */}
       <div className="p-4 border-t border-gray-200">
         <div className="flex gap-2">
@@ -643,9 +663,11 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             <Send className="w-4 h-4" />
           </button>
         </div>
-        <p className="text-xs text-gray-500 mt-2 text-center">
-          Pro tip: Ask me to "create a task" or "help plan my day"
-        </p>
+        {messages.length > 1 && (
+          <p className="text-xs text-gray-500 mt-2 text-center">
+            💡 Try: "create a task", "plan my day", or "show my progress"
+          </p>
+        )}
       </div>
     </div>
   );

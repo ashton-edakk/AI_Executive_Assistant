@@ -36,6 +36,11 @@ export class ChatController {
 
       const lowerMessage = body.message.toLowerCase();
 
+      // Check if this is a help request
+      if (this.geminiService.looksLikeHelpRequest(lowerMessage)) {
+        return this.getHelpResponse();
+      }
+
       // Check if this is a list tasks request
       if (this.geminiService.looksLikeListTasksRequest(lowerMessage)) {
         return await this.handleListTasksRequest(userId);
@@ -273,6 +278,47 @@ export class ChatController {
         error: error.message,
       };
     }
+  }
+
+  private getHelpResponse() {
+    const helpMessage = `# 🤖 AI Executive Assistant - Help Guide
+
+## 📝 Creating Tasks
+Tell me about your tasks naturally:
+- "Create a task to finish my homework by Friday, 2 hours, high priority"
+- "Add a task to prepare for the meeting tomorrow"
+- "I need to submit my report by next week"
+
+## 📅 Planning Your Day  
+- **"Plan my day"** - I'll create an optimized schedule
+- **"What should I work on?"** - Get personalized recommendations
+
+## 📋 Managing Tasks
+- **"Show my tasks"** - List all your tasks
+- **"Change priority of [task] to high"** - Update task priority
+- **"Update due date of [task] to tomorrow"** - Change due dates
+
+## 📊 Tracking Progress
+- **"What did I accomplish?"** - See your daily summary
+- **"My progress"** - View productivity insights
+
+## 🎯 Task Execution
+In the Tasks panel:
+- ▶️ Start tracking time on a task
+- ⏹️ Pause tracking
+- ✅ Mark as complete
+
+## 📆 Google Calendar
+- **"Add to my calendar"** - Sync your plan to Google Calendar
+- **"Confirm my plan"** - Approve and schedule tasks
+
+---
+💡 **Pro Tips:**
+- Use voice input (🎤) for hands-free task creation
+- Be specific about duration and priority for better scheduling
+- Check your Insights panel for productivity trends`;
+
+    return { response: helpMessage };
   }
 
   private async handleListTasksRequest(userId: string) {

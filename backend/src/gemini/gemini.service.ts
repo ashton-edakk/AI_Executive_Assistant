@@ -143,6 +143,12 @@ export class GeminiService {
     return editKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
+  looksLikeHelpRequest(message: string): boolean {
+    const helpKeywords = ['help', 'what can you do', 'how to use', 'commands', 'guide'];
+    const lowerMessage = message.toLowerCase().trim();
+    return helpKeywords.some(keyword => lowerMessage.includes(keyword)) || lowerMessage === 'help';
+  }
+
   async parseEditRequest(message: string, existingTaskTitles: string): Promise<{
     taskTitle: string | null;
     newPriority: 'low' | 'med' | 'high' | null;
