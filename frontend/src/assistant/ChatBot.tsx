@@ -177,6 +177,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     };
   }, []);
 
+  // Store what text was in input before voice started
+  const preVoiceTextRef = useRef<string>('');
+
   const initRecognition = () => {
     if (recognitionRef.current) return;
 
@@ -194,14 +197,26 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      let transcript = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
+      // Build the full transcript from all results
+      let finalTranscript = '';
+      let interimTranscript = '';
+      
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript;
+        } else {
+          interimTranscript += result[0].transcript;
+        }
       }
-      transcript = transcript.trim();
-      if (!transcript) return;
+      
+      // Use final if available, otherwise show interim
+      const currentTranscript = (finalTranscript || interimTranscript).trim();
+      if (!currentTranscript) return;
 
-      setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+      // Replace (not append) the voice portion of the text
+      const baseText = preVoiceTextRef.current;
+      setInputText(baseText ? `${baseText} ${currentTranscript}` : currentTranscript);
     };
 
     recognition.onerror = (event: any) => {
@@ -218,7 +233,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
   const handleVoiceToggle = () => {
     if (!isSpeechSupported) {
-      alert('Speech recognition is not supported in this browser.');
+      alert('Speech recognition is not supported in this browser. Please try Chrome or Edge.');
       return;
     }
 
@@ -230,6 +245,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       return;
     }
 
+    // Save current input text before starting voice
+    preVoiceTextRef.current = inputText;
+    
     initRecognition();
     if (recognitionRef.current) {
       try {
