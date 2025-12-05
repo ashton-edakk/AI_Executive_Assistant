@@ -97,6 +97,18 @@ export class GeminiService {
     return planningKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
+  looksLikeCalendarRequest(message: string): boolean {
+    const calendarKeywords = [
+      'add to calendar', 'add to my calendar', 'add to google calendar',
+      'put on calendar', 'put on my calendar', 'schedule on calendar',
+      'add it to calendar', 'add it to my calendar', 'add this to calendar',
+      'confirm my plan', 'confirm the plan', 'confirm schedule',
+      'add to my google calendar', 'schedule it'
+    ];
+    const lowerMessage = message.toLowerCase();
+    return calendarKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
 private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> {
   try {
     // Check if this is a clarification response to a previous task

@@ -102,9 +102,32 @@ export default function Tasks() {
     }
   };
 
-  // --- Delete task ---
+  // --- Delete task (and related sessions/blocks first) ---
   const deleteTask = async (id: string) => {
     try {
+      // First, delete related task_sessions (foreign key constraint)
+      const { error: sessionsError } = await supabase
+        .from('task_sessions')
+        .delete()
+        .eq('task_id', id);
+      
+      if (sessionsError) {
+        console.error('deleteTask: sessions error', sessionsError);
+        // Continue anyway - might not have sessions
+      }
+
+      // Then, delete related task_blocks
+      const { error: blocksError } = await supabase
+        .from('task_blocks')
+        .delete()
+        .eq('task_id', id);
+      
+      if (blocksError) {
+        console.error('deleteTask: blocks error', blocksError);
+        // Continue anyway - might not have blocks
+      }
+
+      // Finally, delete the task itself
       const { error } = await supabase.from('tasks').delete().eq('id', id);
 
       if (error) {
@@ -281,6 +304,40 @@ export default function Tasks() {
 
   useEffect(() => {
     fetchTasks();
+
+    // Subscribe to realtime changes on the tasks table
+    const setupRealtimeSubscription = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+
+      const channel = supabase
+        .channel('tasks-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: '*', // Listen to INSERT, UPDATE, DELETE
+            schema: 'public',
+            table: 'tasks',
+            filter: `user_id=eq.${session.user.id}`,
+          },
+          (payload) => {
+            console.log('Tasks realtime update:', payload);
+            // Refresh the task list when any change happens
+            fetchTasks();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    };
+
+    const cleanup = setupRealtimeSubscription();
+    
+    return () => {
+      cleanup.then((unsub) => unsub?.());
+    };
   }, []);
 
   return (

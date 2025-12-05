@@ -32,6 +32,11 @@ export class ChatController {
         throw new HttpException('User not authenticated', 401);
       }
 
+      // Check if this is a calendar/confirm request
+      if (this.geminiService.looksLikeCalendarRequest(body.message.toLowerCase())) {
+        return await this.handleCalendarRequest(userId, body, req.user);
+      }
+
       // Check if this is a planning request
       if (this.geminiService.looksLikePlanningRequest(body.message.toLowerCase())) {
         return await this.handlePlanningRequest(userId, body.message);
@@ -100,6 +105,76 @@ export class ChatController {
     } catch (error: any) {
       console.error('Chat error:', error);
       throw new HttpException(error.message || 'Failed to process chat', 500);
+    }
+  }
+
+  private async handleCalendarRequest(userId: string, body: ChatRequest, user: any) {
+    try {
+      // Get today's date
+      const today = DateTime.now().toISODate();
+      if (!today) {
+        throw new Error('Could not determine today\'s date');
+      }
+
+      // First, propose a plan to get the blocks
+      const proposal = await this.plannerService.propose({
+        userId,
+        date: today,
+      });
+
+      if (!proposal.blocks || proposal.blocks.length === 0) {
+        return {
+          response: "📋 **No tasks to schedule!**\n\nYou don't have any tasks to add to your calendar. Create some tasks first by saying something like:\n• \"Create a task to finish my homework by tomorrow, 2 hours, high priority\"",
+        };
+      }
+
+      // Confirm the plan and create Google Calendar events
+      const confirmResult = await this.plannerService.confirmWithUser(
+        {
+          userId,
+          proposalId: proposal.proposalId,
+          acceptBlockIds: proposal.blocks.map((b: any) => b.blockId),
+        },
+        user
+      );
+
+      // Get task details for better response
+      const tasks = await this.tasksService.getUserTasks(userId);
+      const taskMap = new Map(tasks.map(t => [t.id, t]));
+
+      let responseMessage = '📅 **Added to your Google Calendar!**\n\n';
+      
+      if (confirmResult.created && confirmResult.created.length > 0) {
+        responseMessage += '✅ **Scheduled blocks:**\n';
+        proposal.blocks.forEach((block: any, index: number) => {
+          const task = taskMap.get(block.taskId);
+          const startTime = DateTime.fromISO(block.start).toFormat('h:mm a');
+          const endTime = DateTime.fromISO(block.end).toFormat('h:mm a');
+          responseMessage += `• **${task?.title || 'Task'}** - ${startTime} to ${endTime}\n`;
+        });
+      }
+
+      if (confirmResult.skipped && confirmResult.skipped.length > 0) {
+        responseMessage += '\n⚠️ **Skipped (already scheduled or error):**\n';
+        confirmResult.skipped.forEach((skip: any) => {
+          responseMessage += `• Block ${skip.blockId}: ${skip.reason}\n`;
+        });
+      }
+
+      responseMessage += '\n🎉 Check your Google Calendar to see the scheduled focus blocks!';
+
+      return {
+        response: responseMessage,
+        calendar_updated: true,
+        created: confirmResult.created,
+        skipped: confirmResult.skipped,
+      };
+    } catch (error: any) {
+      console.error('Calendar request error:', error);
+      return {
+        response: `❌ I couldn't add tasks to your calendar. ${error.message || 'Please make sure you have connected your Google Calendar and try again.'}`,
+        error: error.message,
+      };
     }
   }
 
