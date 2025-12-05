@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { useSupabase } from "../context/SupabaseSessionContext";
 import Tasks from "../tasks/Tasks";
 import Insights from "./Insights";
-import { ChevronLeft, ChevronRight, Calendar, MessageCircle, CircleCheckBig } from "lucide-react";
+import Settings from "../settings/Settings";
+import { ChevronLeft, ChevronRight, Calendar, MessageCircle, CircleCheckBig, Settings as SettingsIcon, LogOut } from "lucide-react";
 import ChatBot from "../assistant/ChatBot";
 
 interface CalendarEvent {
@@ -26,12 +27,13 @@ interface EventsByWeek {
 }
 
 const Dashboard: React.FC = () => {
-  const { session } = useSupabase();
+  const { session, signOut } = useSupabase();
   const [allEventsByWeek, setAllEventsByWeek] = useState<EventsByWeek[]>([]);
   const [currentWeekIndex, setCurrentWeekIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [isChatOpen, setIsChatOpen] = useState(false); 
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false); 
 
   /**
    * Groups Google Calendar events into weekly buckets starting on Monday
@@ -274,6 +276,27 @@ const Dashboard: React.FC = () => {
 
       {/* Chat Component */}
       <ChatBot isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+
+      {/* Settings Modal */}
+      <Settings isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+
+      {/* Top Right Actions */}
+      <div className="fixed top-4 right-4 flex items-center gap-2 z-30">
+        <button
+          onClick={() => setIsSettingsOpen(true)}
+          className="bg-white text-gray-700 p-3 rounded-full shadow-md hover:bg-gray-50 transition-colors"
+          title="Settings"
+        >
+          <SettingsIcon className="w-5 h-5" />
+        </button>
+        <button
+          onClick={signOut}
+          className="bg-white text-gray-700 p-3 rounded-full shadow-md hover:bg-red-50 hover:text-red-600 transition-colors"
+          title="Sign Out"
+        >
+          <LogOut className="w-5 h-5" />
+        </button>
+      </div>
 
       <div className="flex gap-6 w-full max-w-6xl">
         {/* Calendar Section */}

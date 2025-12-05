@@ -13,6 +13,7 @@ interface SupabaseContextType {
   supabase: SupabaseClient;
   session: Session | null;
   loading: boolean;
+  signOut: () => Promise<void>;
 }
 
 // --- Create Context ---
@@ -40,8 +41,13 @@ export const SupabaseProvider: React.FC<{ children: ReactNode }> = ({ children }
     };
   }, []);
 
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+  };
+
   return (
-    <SupabaseContext.Provider value={{ supabase, session, loading }}>
+    <SupabaseContext.Provider value={{ supabase, session, loading, signOut }}>
       {children}
     </SupabaseContext.Provider>
   );

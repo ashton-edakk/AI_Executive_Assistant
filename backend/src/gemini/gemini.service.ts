@@ -143,6 +143,61 @@ export class GeminiService {
     return editKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
+  async parseEditRequest(message: string, existingTaskTitles: string): Promise<{
+    taskTitle: string | null;
+    newPriority: 'low' | 'med' | 'high' | null;
+    newDueDate: string | null;
+    newEstMinutes: number | null;
+  }> {
+    try {
+      const prompt = `
+      Parse this task edit request and extract the information. Return ONLY valid JSON.
+
+      User message: "${message}"
+      
+      Existing tasks: ${existingTaskTitles}
+      
+      Return this exact JSON format:
+      {
+        "taskTitle": "the task name the user wants to edit (match to existing tasks) or null",
+        "newPriority": "low" or "med" or "high" or null,
+        "newDueDate": "YYYY-MM-DD format or null",
+        "newEstMinutes": number or null
+      }
+
+      Rules:
+      - Match taskTitle to the closest existing task name
+      - For priority: "urgent/important/critical" = "high", "normal/medium" = "med", "low/not urgent" = "low"
+      - For due date: Convert "tomorrow" to actual date, "next week" to Monday, etc.
+      - Current date: ${new Date().toISOString().split('T')[0]}
+      - For time: "2 hours" = 120, "30 minutes" = 30
+
+      JSON:`;
+
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text().trim();
+      
+      const cleanJson = text.replace(/```json\n?|\n?```/g, '');
+      const parsed = JSON.parse(cleanJson);
+
+      return {
+        taskTitle: parsed.taskTitle || null,
+        newPriority: parsed.newPriority || null,
+        newDueDate: parsed.newDueDate || null,
+        newEstMinutes: parsed.newEstMinutes || null,
+      };
+    } catch (error) {
+      console.error('Failed to parse edit request:', error);
+      return {
+        taskTitle: null,
+        newPriority: null,
+        newDueDate: null,
+        newEstMinutes: null,
+      };
+    }
+  }
+
 private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> {
   try {
     // Check if this is a clarification response to a previous task

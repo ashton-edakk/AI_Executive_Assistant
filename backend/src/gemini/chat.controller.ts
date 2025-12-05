@@ -51,6 +51,11 @@ export class ChatController {
         return await this.handleCalendarRequest(userId, body, req.user);
       }
 
+      // Check if this is an edit task request
+      if (this.geminiService.looksLikeEditTaskRequest(lowerMessage)) {
+        return await this.handleEditTaskRequest(userId, body.message);
+      }
+
       // Check if this is a planning request
       if (this.geminiService.looksLikePlanningRequest(lowerMessage)) {
         return await this.handlePlanningRequest(userId, body.message);
@@ -324,6 +329,87 @@ export class ChatController {
       console.error('List tasks error:', error);
       return {
         response: `I couldn't fetch your tasks. ${error.message || 'Please try again.'}`,
+        error: error.message,
+      };
+    }
+  }
+
+  private async handleEditTaskRequest(userId: string, message: string) {
+    try {
+      // Get all tasks to match against
+      const tasks = await this.tasksService.getUserTasks(userId);
+      
+      if (!tasks || tasks.length === 0) {
+        return {
+          response: "📋 You don't have any tasks to edit. Create one first!",
+        };
+      }
+
+      // Use Gemini to parse the edit request
+      const taskTitles = tasks.map(t => t.title).join(', ');
+      const parseResult = await this.geminiService.parseEditRequest(message, taskTitles);
+
+      if (!parseResult.taskTitle) {
+        return {
+          response: "🤔 I couldn't figure out which task you want to edit. Please be more specific.\n\nYour tasks:\n" + 
+            tasks.map(t => `• ${t.title}`).join('\n') +
+            "\n\nTry: \"Change priority of [task name] to high\"",
+        };
+      }
+
+      // Find the matching task (fuzzy match)
+      const searchTitle = parseResult.taskTitle.toLowerCase();
+      const matchedTask = tasks.find(t => 
+        t.title.toLowerCase().includes(searchTitle) ||
+        searchTitle.includes(t.title.toLowerCase())
+      );
+
+      if (!matchedTask) {
+        return {
+          response: `🔍 I couldn't find a task matching "${parseResult.taskTitle}".\n\nYour tasks:\n` +
+            tasks.map(t => `• ${t.title}`).join('\n'),
+        };
+      }
+
+      // Build the update object
+      const updates: any = {};
+      let changeDescription = '';
+
+      if (parseResult.newPriority) {
+        updates.priority = parseResult.newPriority;
+        const emoji = parseResult.newPriority === 'high' ? '🔴' : parseResult.newPriority === 'med' ? '🟡' : '🟢';
+        changeDescription += `Priority → ${parseResult.newPriority} ${emoji}\n`;
+      }
+
+      if (parseResult.newDueDate) {
+        updates.due_date = parseResult.newDueDate;
+        changeDescription += `Due date → ${parseResult.newDueDate}\n`;
+      }
+
+      if (parseResult.newEstMinutes) {
+        updates.est_minutes = parseResult.newEstMinutes;
+        changeDescription += `Estimated time → ${parseResult.newEstMinutes} minutes\n`;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return {
+          response: "🤔 I understood you want to edit a task, but I couldn't determine what to change.\n\nTry:\n• \"Change priority of [task] to high/medium/low\"\n• \"Update due date of [task] to tomorrow\"\n• \"Set estimated time for [task] to 2 hours\"",
+        };
+      }
+
+      // Update the task
+      await this.tasksService.updateTask(matchedTask.id, updates);
+
+      return {
+        response: `✅ **Updated "${matchedTask.title}":**\n\n${changeDescription}`,
+        task_updated: true,
+        task: matchedTask,
+        updates: updates,
+      };
+    } catch (error: any) {
+      console.error('Edit task error:', error);
+      return {
+        response: `I couldn't update the task. ${error.message || 'Please try again.'}`,
         error: error.message,
       };
     }
