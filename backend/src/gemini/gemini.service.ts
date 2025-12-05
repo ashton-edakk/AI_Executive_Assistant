@@ -109,6 +109,40 @@ export class GeminiService {
     return calendarKeywords.some(keyword => lowerMessage.includes(keyword));
   }
 
+  looksLikeListTasksRequest(message: string): boolean {
+    const listKeywords = [
+      'show my tasks', 'list my tasks', 'what are my tasks',
+      'show tasks', 'list tasks', 'my tasks', 'all tasks',
+      'what do i have to do', 'what\'s on my list', 'show todo',
+      'what tasks do i have', 'pending tasks'
+    ];
+    const lowerMessage = message.toLowerCase();
+    return listKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  looksLikeAccomplishmentRequest(message: string): boolean {
+    const accomplishKeywords = [
+      'what did i accomplish', 'what have i done', 'my accomplishments',
+      'what i completed', 'completed tasks', 'done today',
+      'what did i finish', 'my progress', 'show my progress',
+      'how productive', 'productivity summary', 'daily summary'
+    ];
+    const lowerMessage = message.toLowerCase();
+    return accomplishKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  looksLikeEditTaskRequest(message: string): boolean {
+    const editKeywords = [
+      'change priority', 'update priority', 'set priority',
+      'change due date', 'update due date', 'move due date',
+      'edit task', 'update task', 'modify task',
+      'make it high priority', 'make it low priority',
+      'change the', 'update the'
+    ];
+    const lowerMessage = message.toLowerCase();
+    return editKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
 private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> {
   try {
     // Check if this is a clarification response to a previous task

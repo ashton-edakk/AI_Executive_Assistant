@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useSupabase } from "../context/SupabaseSessionContext";
 import Tasks from "../tasks/Tasks";
-import { ChevronLeft, ChevronRight, Calendar, MessageCircle, CircleCheckBig} from "lucide-react";
+import Insights from "./Insights";
+import { ChevronLeft, ChevronRight, Calendar, MessageCircle, CircleCheckBig } from "lucide-react";
 import ChatBot from "../assistant/ChatBot";
 
 interface CalendarEvent {
@@ -410,13 +411,21 @@ const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* Tasks Section */}
-        <div className="bg-white p-6 rounded-xl shadow-md w-1/3">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2 mb-6">
-            <CircleCheckBig className="w-8 h-8" />
-            Your Tasks
-          </h1>
-          <Tasks />
+        {/* Right Column: Tasks + Insights */}
+        <div className="w-1/3 space-y-6">
+          {/* Tasks Section */}
+          <div className="bg-white p-6 rounded-xl shadow-md">
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2 mb-4">
+              <CircleCheckBig className="w-6 h-6" />
+              Your Tasks
+            </h1>
+            <Tasks />
+          </div>
+
+          {/* Insights Section */}
+          <div className="bg-white p-6 rounded-xl shadow-md">
+            <Insights />
+          </div>
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { GeminiService } from './gemini.service';
 import { TasksService } from '../tasks/tasks.service';
 import { SupabaseAuthGuard } from '../auth/supabase.guard';
 import { PlannerService } from '../planning/services/planner.service';
+import { InsightsService } from '../planning/services/insights.service';
 import { DateTime } from 'luxon';
 
 interface ChatRequest {
@@ -22,6 +23,7 @@ export class ChatController {
     private readonly geminiService: GeminiService,
     private readonly tasksService: TasksService,
     private readonly plannerService: PlannerService,
+    private readonly insightsService: InsightsService,
   ) {}
 
   @Post()
@@ -32,13 +34,25 @@ export class ChatController {
         throw new HttpException('User not authenticated', 401);
       }
 
+      const lowerMessage = body.message.toLowerCase();
+
+      // Check if this is a list tasks request
+      if (this.geminiService.looksLikeListTasksRequest(lowerMessage)) {
+        return await this.handleListTasksRequest(userId);
+      }
+
+      // Check if this is an accomplishment/progress request
+      if (this.geminiService.looksLikeAccomplishmentRequest(lowerMessage)) {
+        return await this.handleAccomplishmentRequest(userId);
+      }
+
       // Check if this is a calendar/confirm request
-      if (this.geminiService.looksLikeCalendarRequest(body.message.toLowerCase())) {
+      if (this.geminiService.looksLikeCalendarRequest(lowerMessage)) {
         return await this.handleCalendarRequest(userId, body, req.user);
       }
 
       // Check if this is a planning request
-      if (this.geminiService.looksLikePlanningRequest(body.message.toLowerCase())) {
+      if (this.geminiService.looksLikePlanningRequest(lowerMessage)) {
         return await this.handlePlanningRequest(userId, body.message);
       }
 
@@ -251,6 +265,140 @@ export class ChatController {
       console.error('Planning error:', error);
       return {
         response: `I couldn't create a plan right now. ${error.message || 'Please try again later.'}`,
+        error: error.message,
+      };
+    }
+  }
+
+  private async handleListTasksRequest(userId: string) {
+    try {
+      const tasks = await this.tasksService.getUserTasks(userId);
+      
+      if (!tasks || tasks.length === 0) {
+        return {
+          response: "📋 **You don't have any tasks yet!**\n\nCreate one by saying:\n• \"Create a task to finish my homework by tomorrow, 2 hours, high priority\"\n• \"Add a task to prepare for the meeting\"",
+        };
+      }
+
+      const todoTasks = tasks.filter(t => t.status === 'todo');
+      const inProgressTasks = tasks.filter(t => t.status === 'in_progress');
+      const doneTasks = tasks.filter(t => t.status === 'done');
+
+      let responseMessage = '📋 **Your Tasks:**\n\n';
+
+      if (inProgressTasks.length > 0) {
+        responseMessage += '🔄 **In Progress:**\n';
+        inProgressTasks.forEach(t => {
+          const priorityEmoji = t.priority === 'high' ? '🔴' : t.priority === 'med' ? '🟡' : '🟢';
+          responseMessage += `• ${t.title} ${priorityEmoji}`;
+          if (t.est_minutes) responseMessage += ` (${t.est_minutes}m)`;
+          if (t.due_date) responseMessage += ` - Due: ${t.due_date}`;
+          responseMessage += '\n';
+        });
+        responseMessage += '\n';
+      }
+
+      if (todoTasks.length > 0) {
+        responseMessage += '📝 **To Do:**\n';
+        todoTasks.forEach(t => {
+          const priorityEmoji = t.priority === 'high' ? '🔴' : t.priority === 'med' ? '🟡' : '🟢';
+          responseMessage += `• ${t.title} ${priorityEmoji}`;
+          if (t.est_minutes) responseMessage += ` (${t.est_minutes}m)`;
+          if (t.due_date) responseMessage += ` - Due: ${t.due_date}`;
+          responseMessage += '\n';
+        });
+        responseMessage += '\n';
+      }
+
+      if (doneTasks.length > 0) {
+        responseMessage += `✅ **Completed:** ${doneTasks.length} task${doneTasks.length > 1 ? 's' : ''}\n`;
+      }
+
+      responseMessage += `\n---\n**Total:** ${tasks.length} tasks (${todoTasks.length} to do, ${inProgressTasks.length} in progress, ${doneTasks.length} done)`;
+
+      return {
+        response: responseMessage,
+        tasks: tasks,
+      };
+    } catch (error: any) {
+      console.error('List tasks error:', error);
+      return {
+        response: `I couldn't fetch your tasks. ${error.message || 'Please try again.'}`,
+        error: error.message,
+      };
+    }
+  }
+
+  private async handleAccomplishmentRequest(userId: string) {
+    try {
+      const today = DateTime.now().toISODate();
+      if (!today) throw new Error('Could not determine today\'s date');
+
+      const [dailyInsights, tasks] = await Promise.all([
+        this.insightsService.daily(userId, today),
+        this.tasksService.getUserTasks(userId),
+      ]);
+
+      const completedToday = tasks.filter(t => 
+        t.status === 'done' && 
+        t.updated_at && 
+        t.updated_at.startsWith(today)
+      );
+
+      let responseMessage = '🎯 **Your Productivity Summary:**\n\n';
+
+      // Time worked
+      if (dailyInsights.minutes.executed > 0) {
+        const hours = Math.floor(dailyInsights.minutes.executed / 60);
+        const mins = dailyInsights.minutes.executed % 60;
+        responseMessage += `⏱️ **Time Worked Today:** ${hours > 0 ? `${hours}h ` : ''}${mins}m\n\n`;
+      }
+
+      // Completed tasks
+      if (completedToday.length > 0) {
+        responseMessage += '✅ **Completed Today:**\n';
+        completedToday.forEach(t => {
+          responseMessage += `• ${t.title}`;
+          if (t.actual_minutes_total) responseMessage += ` (${t.actual_minutes_total}m)`;
+          responseMessage += '\n';
+        });
+        responseMessage += '\n';
+      } else {
+        responseMessage += '📝 No tasks completed yet today.\n\n';
+      }
+
+      // Progress stats
+      if (dailyInsights.minutes.planned > 0) {
+        const completionRate = Math.round((dailyInsights.minutes.executed / dailyInsights.minutes.planned) * 100);
+        responseMessage += `📊 **Progress:** ${completionRate}% of planned time\n`;
+      }
+
+      // Estimation accuracy
+      if (dailyInsights.estimationBias !== 0) {
+        const biasPercent = Math.round(dailyInsights.estimationBias * 100);
+        if (biasPercent > 15) {
+          responseMessage += `💡 **Tip:** You're underestimating tasks by ~${biasPercent}%. Consider adding buffer time.\n`;
+        } else if (biasPercent < -15) {
+          responseMessage += `💡 **Tip:** You're overestimating tasks by ~${Math.abs(biasPercent)}%. You're faster than you think!\n`;
+        } else {
+          responseMessage += `🎯 **Great job!** Your time estimates are accurate.\n`;
+        }
+      }
+
+      // Slipped tasks warning
+      if (dailyInsights.slipped.length > 0) {
+        responseMessage += `\n⚠️ **${dailyInsights.slipped.length} task${dailyInsights.slipped.length > 1 ? 's' : ''} slipped today** - scheduled but not worked on.\n`;
+      }
+
+      return {
+        response: responseMessage,
+        insights: dailyInsights,
+        completedTasks: completedToday,
+      };
+    } catch (error: any) {
+      console.error('Accomplishment request error:', error);
+      return {
+        response: `I couldn't fetch your accomplishments. ${error.message || 'Please try again.'}`,
         error: error.message,
       };
     }
