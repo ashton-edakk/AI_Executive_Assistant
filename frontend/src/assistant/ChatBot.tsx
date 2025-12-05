@@ -223,10 +223,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     recognition.onerror = (event: any) => {
       console.error('Speech recognition error:', event);
       setIsListening(false);
+      recognitionRef.current = null;
     };
 
     recognition.onend = () => {
       setIsListening(false);
+      // Clear the ref so a new recognition instance is created next time
+      // (Web Speech API doesn't allow restarting a stopped recognition)
+      recognitionRef.current = null;
     };
 
     recognitionRef.current = recognition;
@@ -241,6 +245,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     if (isListening) {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
+        // Clear ref so new instance is created next time
+        recognitionRef.current = null;
       }
       setIsListening(false);
       return;
