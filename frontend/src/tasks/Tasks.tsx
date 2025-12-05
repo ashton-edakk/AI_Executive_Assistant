@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Play, Square, CheckCircle, Clock, Trash2, MessageCircle } from 'lucide-react';
+import { Play, Square, CheckCircle, Clock, Trash2, MessageCircle, Filter, ArrowUpDown, ChevronDown } from 'lucide-react';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -25,6 +25,9 @@ interface TaskRow {
 
 type Task = TaskRow;
 
+type FilterOption = 'all' | 'todo' | 'in_progress' | 'done';
+type SortOption = 'created' | 'priority' | 'due_date' | 'name';
+
 // --- TASKS COMPONENT ---
 export default function Tasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -34,6 +37,46 @@ export default function Tasks() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isTracking, setIsTracking] = useState<boolean>(false);
+
+  // Filter and sort state
+  const [filterStatus, setFilterStatus] = useState<FilterOption>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('priority');
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+
+  // Filtered and sorted tasks
+  const filteredAndSortedTasks = useMemo(() => {
+    let result = [...tasks];
+
+    // Filter by status
+    if (filterStatus !== 'all') {
+      result = result.filter(t => t.status === filterStatus);
+    }
+
+    // Sort
+    result.sort((a, b) => {
+      switch (sortBy) {
+        case 'priority': {
+          const priorityOrder = { high: 0, med: 1, low: 2, null: 3 };
+          const aPriority = priorityOrder[a.priority ?? 'null'];
+          const bPriority = priorityOrder[b.priority ?? 'null'];
+          return aPriority - bPriority;
+        }
+        case 'due_date': {
+          if (!a.due_date && !b.due_date) return 0;
+          if (!a.due_date) return 1;
+          if (!b.due_date) return -1;
+          return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+        }
+        case 'name':
+          return a.title.localeCompare(b.title);
+        case 'created':
+        default:
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+    });
+
+    return result;
+  }, [tasks, filterStatus, sortBy]);
 
   // --- Fetch tasks for the current user ---
   const fetchTasks = async () => {
@@ -376,6 +419,53 @@ export default function Tasks() {
         <p className="mb-3 text-sm text-red-500">{errorMessage}</p>
       )}
 
+      {/* Filter/Sort Controls */}
+      {tasks.length > 0 && (
+        <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-100">
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilterMenu(!showFilterMenu)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              {filterStatus === 'all' ? 'All' : filterStatus.replace('_', ' ')}
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            {showFilterMenu && (
+              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[120px]">
+                {(['all', 'todo', 'in_progress', 'done'] as FilterOption[]).map((opt) => (
+                  <button
+                    key={opt}
+                    onClick={() => { setFilterStatus(opt); setShowFilterMenu(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg ${
+                      filterStatus === opt ? 'bg-indigo-50 text-indigo-600' : 'text-gray-700'
+                    }`}
+                  >
+                    {opt === 'all' ? 'All Tasks' : opt.replace('_', ' ')}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Sort Options */}
+          <div className="flex items-center gap-1">
+            <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              className="text-sm text-gray-600 bg-transparent border-none cursor-pointer focus:ring-0 py-1"
+            >
+              <option value="priority">Priority</option>
+              <option value="due_date">Due Date</option>
+              <option value="name">Name</option>
+              <option value="created">Created</option>
+            </select>
+          </div>
+        </div>
+      )}
+
       {/* Task List */}
       <ul className="space-y-3">
         {tasks.length === 0 && (
@@ -390,7 +480,19 @@ export default function Tasks() {
             </p>
           </li>
         )}
-        {tasks.map((task) => {
+        {tasks.length > 0 && filteredAndSortedTasks.length === 0 && (
+          <li className="text-center py-6">
+            <Filter className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+            <p className="text-gray-500 text-sm">No tasks match your filter</p>
+            <button
+              onClick={() => setFilterStatus('all')}
+              className="text-indigo-600 text-sm mt-2 hover:underline"
+            >
+              Clear filter
+            </button>
+          </li>
+        )}
+        {filteredAndSortedTasks.map((task) => {
           const isCompleted = task.status === 'done';
           const isActive = activeTaskId === task.id;
           const priorityColor = task.priority === 'high' ? 'bg-red-100 text-red-700' 
