@@ -12,7 +12,7 @@ interface Message {
   text: string;
   isUser: boolean;
   timestamp: Date;
-  type?: 'task_created' | 'needs_clarification' | 'error' | 'info';
+  type?: 'task_created' | 'multi_task_created' | 'needs_clarification' | 'error' | 'info';
 }
 
 interface ChatBotProps {
@@ -32,6 +32,11 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     partialTask: any;
     originalMessage: string;
   }>({ active: false, partialTask: null, originalMessage: '' });
+  const [refinementState, setRefinementState] = useState<{
+    active: boolean;
+    taskId: string;
+    taskTitle: string;
+  }>({ active: false, taskId: '', taskTitle: '' });
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isSpeechSupported, setIsSpeechSupported] = useState<boolean>(false);
   const recognitionRef = useRef<any | null>(null);
@@ -334,6 +339,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             original_message: clarificationState.originalMessage,
           }
           : undefined,
+        refinement_state: refinementState.active
+          ? {
+            active: true,
+            task_id: refinementState.taskId,
+            task_title: refinementState.taskTitle,
+          }
+          : undefined,
       };
 
       // Get the access token from the session for authenticated API calls
@@ -354,11 +366,34 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
 
       const data = await response.json();
 
-      if (data.ready_to_create && data.task_created) {
-        const formattedMessage = formatTaskCreatedMessage(data);
+      // Handle multi-task creation response
+      if (data.is_multi_task && data.task_created) {
         const assistantMessage: Message = {
           id: Date.now() + 1,
-          text: formattedMessage,
+          text: data.response,
+          isUser: false,
+          timestamp: new Date(),
+          type: 'multi_task_created',
+        };
+
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
+
+        setClarificationState({
+          active: false,
+          partialTask: null,
+          originalMessage: '',
+        });
+      }
+      // Handle single task creation response
+      else if (data.ready_to_create && data.task_created) {
+        // Use the response directly from backend (already formatted nicely)
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: data.response || formatTaskCreatedMessage(data),
           isUser: false,
           timestamp: new Date(),
           type: 'task_created',
@@ -375,7 +410,38 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
-      } else if (data.ready_to_create && !data.task_created) {
+
+        // Check if awaiting refinement (task created, but user can optionally add more details)
+        if (data.awaiting_refinement && data.refinement_state) {
+          setRefinementState({
+            active: true,
+            taskId: data.refinement_state.task_id,
+            taskTitle: data.refinement_state.task_title,
+          });
+        } else {
+          setRefinementState({ active: false, taskId: '', taskTitle: '' });
+        }
+      } 
+      // Handle refinement response (user provided more details for a task)
+      else if (data.refinement_complete) {
+        const assistantMessage: Message = {
+          id: Date.now() + 1,
+          text: data.response,
+          isUser: false,
+          timestamp: new Date(),
+          type: data.task_updated ? 'task_created' : 'info',
+        };
+
+        setMessages(prev => {
+          const updated = [...prev, assistantMessage];
+          saveChatHistory(updated);
+          return updated;
+        });
+
+        // Clear refinement state
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
+      }
+      else if (data.ready_to_create && !data.task_created) {
         const assistantMessage: Message = {
           id: Date.now() + 1,
           text: data.response || "I understood your task but couldn't save it. Please try again.",
@@ -395,11 +461,12 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       } else if (data.needs_clarification) {
-        const formattedMessage = formatClarificationRequest(data);
+        // Clarification is now rarely triggered - only for truly ambiguous input
         const assistantMessage: Message = {
           id: Date.now() + 1,
-          text: formattedMessage,
+          text: data.response || "I need a bit more information. What task would you like me to create?",
           isUser: false,
           timestamp: new Date(),
           type: 'needs_clarification',
@@ -416,6 +483,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: data.partial_task,
           originalMessage: inputText,
         });
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       } else {
         const assistantMessage: Message = {
           id: Date.now() + 1,
@@ -435,6 +503,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       }
     } catch (error: any) {
       console.error('Error in chat interaction:', error);
@@ -565,7 +634,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
                   <div
                     className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${msg.isUser
                       ? 'bg-indigo-600 text-white rounded-br-none'
-                      : msg.type === 'task_created'
+                      : msg.type === 'task_created' || msg.type === 'multi_task_created'
                         ? 'bg-green-50 text-gray-900 border border-green-200 rounded-bl-none'
                         : msg.type === 'needs_clarification'
                           ? 'bg-yellow-50 text-gray-900 border border-yellow-200 rounded-bl-none'
@@ -629,9 +698,11 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder={
-              clarificationState.active
-                ? "Provide the missing information..."
-                : "Ask me about your schedule, tasks, or say 'Create a task to...'"
+              refinementState.active
+                ? "Add details (e.g., 'due tomorrow, 2 hours') or say 'looks good'"
+                : clarificationState.active
+                  ? "Provide the missing information..."
+                  : "Ask me about your schedule, tasks, or say 'Create a task to...'"
             }
             className="flex-1 border border-gray-300 rounded-lg px-3 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             rows={2}

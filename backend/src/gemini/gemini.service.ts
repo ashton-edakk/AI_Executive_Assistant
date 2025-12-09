@@ -6,8 +6,13 @@ import {
   ChatResponse, 
   ClarificationNeededResponse, 
   ReadyToCreateResponse, 
-  RegularChatResponse 
+  RegularChatResponse,
+  MultiTaskResponse,
+  TaskCreatedWithRefinementResponse
 } from './types/chat-response.types';
+
+// Re-export for convenience
+export type { MultiTaskResponse, TaskCreatedWithRefinementResponse } from './types/chat-response.types';
 
 @Injectable()
 export class GeminiService {
@@ -29,12 +34,12 @@ export class GeminiService {
         temperature: 0.7,
         topK: 40,
         topP: 0.95,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 2048,
       },
     });
   }
 
-  async generateResponse(body: InsertMessageDto): Promise<ChatResponse> {
+  async generateResponse(body: InsertMessageDto): Promise<ChatResponse | MultiTaskResponse> {
     try {
       // Check if this looks like a task creation request
       if (this.looksLikeTaskCreation(body.message) || body.context === 'clarification') {
@@ -45,6 +50,10 @@ export class GeminiService {
       const prompt = `
         You are an AI Executive Assistant helping the user with planning, task breakdown, scheduling, and productivity.
         Stay helpful, structured, and concise.
+        
+        IMPORTANT: If the user mentions anything that sounds like a task, project, assignment, exam, deadline, 
+        or something they need to do - help them create it as a task rather than asking questions.
+        Be action-oriented, not question-oriented.
 
         User message: ${body.message}
 
@@ -74,24 +83,53 @@ export class GeminiService {
   }
 
   private looksLikeTaskCreation(message: string): boolean {
-    const taskKeywords = [
-      'create', 'add', 'new task', 'make a task', 'schedule', 
-      'remind me to', 'i need to', 'todo:', 'task:',
-      'set a task', 'add to my tasks', 'i have to'
-    ];
     const lowerMessage = message.toLowerCase();
+    
     // Don't treat planning requests as task creation
     if (this.looksLikePlanningRequest(lowerMessage)) {
       return false;
     }
-    return taskKeywords.some(keyword => lowerMessage.includes(keyword));
+    
+    // Explicit task creation keywords
+    const explicitTaskKeywords = [
+      'create', 'add', 'new task', 'make a task', 
+      'remind me to', 'i need to', 'todo:', 'task:',
+      'set a task', 'add to my tasks', 'i have to',
+      'create task', 'add task', 'make task'
+    ];
+    
+    // Context keywords that suggest task creation
+    const contextKeywords = [
+      'exam', 'test', 'quiz', 'midterm', 'final',
+      'project', 'homework', 'assignment', 'paper', 'essay',
+      'deadline', 'due', 'submit', 'turn in',
+      'study for', 'prepare for', 'finish', 'complete',
+      'meeting', 'call', 'appointment',
+      'work on', 'start', 'begin',
+      'by tomorrow', 'by friday', 'by next week', 'by monday',
+      'this week', 'today', 'tonight'
+    ];
+    
+    // Check explicit keywords first
+    if (explicitTaskKeywords.some(keyword => lowerMessage.includes(keyword))) {
+      return true;
+    }
+    
+    // Check context keywords - need at least one to trigger task creation
+    const hasContextKeyword = contextKeywords.some(keyword => lowerMessage.includes(keyword));
+    
+    // Additional check: if message mentions multiple things with "and" or commas, likely tasks
+    const hasMultipleItems = (lowerMessage.includes(' and ') || lowerMessage.includes(', ')) && hasContextKeyword;
+    
+    return hasContextKeyword || hasMultipleItems;
   }
 
   looksLikePlanningRequest(message: string): boolean {
     const planningKeywords = [
       'plan my day', 'plan today', 'schedule my day', 'what should i work on',
       'help me plan', 'organize my tasks', 'prioritize my tasks',
-      'what\'s my plan', 'show my schedule', 'daily plan'
+      'what\'s my plan', 'show my schedule', 'daily plan',
+      'plan for today', 'today\'s plan', 'what\'s on my schedule'
     ];
     const lowerMessage = message.toLowerCase();
     return planningKeywords.some(keyword => lowerMessage.includes(keyword));
@@ -103,7 +141,7 @@ export class GeminiService {
       'put on calendar', 'put on my calendar', 'schedule on calendar',
       'add it to calendar', 'add it to my calendar', 'add this to calendar',
       'confirm my plan', 'confirm the plan', 'confirm schedule',
-      'add to my google calendar', 'schedule it'
+      'add to my google calendar', 'schedule it', 'put it on my calendar'
     ];
     const lowerMessage = message.toLowerCase();
     return calendarKeywords.some(keyword => lowerMessage.includes(keyword));
@@ -114,7 +152,7 @@ export class GeminiService {
       'show my tasks', 'list my tasks', 'what are my tasks',
       'show tasks', 'list tasks', 'my tasks', 'all tasks',
       'what do i have to do', 'what\'s on my list', 'show todo',
-      'what tasks do i have', 'pending tasks'
+      'what tasks do i have', 'pending tasks', 'view tasks'
     ];
     const lowerMessage = message.toLowerCase();
     return listKeywords.some(keyword => lowerMessage.includes(keyword));
@@ -204,194 +242,322 @@ export class GeminiService {
     }
   }
 
-private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> {
-  try {
-    // Check if this is a clarification response to a previous task
-    if (body.context === 'clarification' && body.partialTask) {
-      return await this.handleClarificationResponse(body);
-    }
+  private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse | MultiTaskResponse> {
+    try {
+      // Check if this is a clarification response to a previous task
+      if (body.context === 'clarification' && body.partialTask) {
+        return await this.handleClarificationResponse(body);
+      }
 
-    const prompt = `
-    Parse this task description and extract structured information. Return ONLY valid JSON in this exact format:
-    {
-      "title": "string (required)",
-      "notes": "string (optional)",
-      "due_date": "YYYY-MM-DD or null",
-      "priority": "low/med/high or null",
-      "est_minutes": "number or null",
-      "clarification_needed": "boolean",
-      "clarification_question": "string if clarification_needed is true"
-    }
+      // First, detect if this might be multiple tasks
+      const multiTaskResult = await this.detectAndParseMultipleTasks(body.message);
+      
+      if (multiTaskResult.isMultiple && multiTaskResult.tasks.length > 1) {
+        return this.createMultiTaskResponse(multiTaskResult.tasks);
+      }
 
-    Task: "${body.message}"
+      // Single task parsing with smart defaults
+      const prompt = `
+      Parse this task description and extract structured information. Return ONLY valid JSON.
+      
+      CRITICAL RULES - BE ACTION-ORIENTED:
+      1. ALWAYS create the task if you can understand what the user wants to do
+      2. Use SMART DEFAULTS - don't ask for missing information, infer it:
+         - No priority mentioned? Infer from context or default to "med"
+         - No time estimate? Estimate based on task type (exam study = 120min, quick call = 15min, meeting = 60min)
+         - No due date? Leave as null (that's fine!)
+      3. ONLY set clarification_needed=true if you genuinely cannot understand what task to create
+      4. The title is the only truly required field
 
-    Rules:
-    - Title is REQUIRED. If unclear, set clarification_needed to true
-    - due_date: extract from phrases like "by friday", "next week", "tomorrow", specific dates. Format as YYYY-MM-DD
-    - priority: extract from words like "urgent/important/critical" = high, "medium/normal" = med, "low/not urgent" = low
-    - est_minutes: estimate from time references like "2 hour meeting" = 120, "30 minute task" = 30
-    - Current date: ${new Date().toISOString().split('T')[0]}
-    - If est_minutes is provided, it must be greater than 0
-    - If clarification is needed, provide a specific, natural-sounding question about what's missing
+      Task: "${body.message}"
+      Current date: ${new Date().toISOString().split('T')[0]}
 
-    Examples:
-    - "Finish report by Friday" => {"title": "Finish report", "due_date": "2024-12-20", ...}
-    - "High priority: Call client" => {"title": "Call client", "priority": "high", ...}
-    - "Study for exam for 2 hours" => {"title": "Study for exam", "est_minutes": 120, ...}
+      SMART INFERENCE GUIDE:
+      - "exam/test/final" → priority: "high", est_minutes: 120-180
+      - "homework/assignment" → priority: "med", est_minutes: 60-90
+      - "project" → priority: "high", est_minutes: 120
+      - "call/meeting" → priority: "med", est_minutes: 30-60
+      - "email/message" → priority: "low", est_minutes: 15
+      - "review/read" → priority: "med", est_minutes: 30-45
+      - "tomorrow" in text → priority should be at least "med"
+      - "urgent/asap/critical" → priority: "high"
+      - "when you get a chance/sometime" → priority: "low"
 
-    JSON:`;
+      Return this exact JSON format:
+      {
+        "title": "clear, actionable task title",
+        "notes": "any additional context or null",
+        "due_date": "YYYY-MM-DD or null",
+        "priority": "low" or "med" or "high",
+        "est_minutes": number (your best estimate, never null unless truly unknowable),
+        "clarification_needed": false,
+        "clarification_question": null
+      }
 
-    const result = await this.model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text().trim();
-    
-    const cleanJson = text.replace(/```json\n?|\n?```/g, '');
-    const parsedTask = JSON.parse(cleanJson);
+      Examples:
+      - "exam tomorrow" → {"title": "Study for exam", "due_date": "2024-12-10", "priority": "high", "est_minutes": 120, ...}
+      - "cs 484 project due friday" → {"title": "Work on CS 484 project", "due_date": "2024-12-13", "priority": "high", "est_minutes": 120, ...}
+      - "call mom" → {"title": "Call mom", "priority": "med", "est_minutes": 15, ...}
+      - "finish report" → {"title": "Finish report", "priority": "med", "est_minutes": 60, ...}
 
-    console.log('Parsed task:', parsedTask);
+      JSON:`;
 
-    // Check if we need clarification for missing important fields
-    let needsClarification = parsedTask.clarification_needed;
-    let clarificationQuestion = parsedTask.clarification_question;
+      const result = await this.model.generateContent(prompt);
+      const geminiResult = await result.response;
+      const text = geminiResult.text().trim();
+      
+      const cleanJson = text.replace(/```json\n?|\n?```/g, '');
+      const parsedTask = JSON.parse(cleanJson);
 
-    // If Gemini didn't set clarification but we have missing fields, generate a natural question
-    if (!needsClarification) {
+      console.log('Parsed task:', parsedTask);
+
+      // Apply smart defaults if still missing (safety net)
+      if (!parsedTask.priority) {
+        parsedTask.priority = 'med';
+      }
+      
+      // Only ask for clarification if title is missing or unclear
+      if (!parsedTask.title || parsedTask.title.trim() === '') {
+        const clarificationResponse: ClarificationNeededResponse = {
+          response: "I'd love to help you create a task! Could you tell me what you need to do?",
+          needs_clarification: true,
+          partial_task: parsedTask
+        };
+        return clarificationResponse;
+      }
+
+      // Check for invalid est_minutes (if provided but <= 0)
+      if (parsedTask.est_minutes !== null && parsedTask.est_minutes !== undefined && parsedTask.est_minutes <= 0) {
+        parsedTask.est_minutes = 30; // Default to 30 minutes instead of asking
+      }
+
+      // Check what's missing to generate ONE optional refinement prompt
       const missingFields: string[] = [];
       if (!parsedTask.due_date) missingFields.push('due_date');
-      if (!parsedTask.priority) missingFields.push('priority');
       if (!parsedTask.est_minutes) missingFields.push('est_minutes');
-
-      if (missingFields.length > 0) {
-        needsClarification = true;
-        // Let Gemini generate a natural-sounding clarification question
-        clarificationQuestion = await this.generateNaturalClarification(parsedTask, missingFields, body.message);
-      }
-    }
-
-    // Check for invalid est_minutes (if provided but <= 0)
-    if (parsedTask.est_minutes !== null && parsedTask.est_minutes <= 0) {
-      needsClarification = true;
-      clarificationQuestion = await this.generateNaturalClarification(parsedTask, ['invalid_est_minutes'], body.message);
-    }
-
-    if (needsClarification) {
-      const clarificationResponse: ClarificationNeededResponse = {
-        response: clarificationQuestion || "Could you provide more details about this task?",
-        needs_clarification: true,
-        partial_task: parsedTask
-      };
       
-      return clarificationResponse;
-    }
+      // Generate a single, concise refinement prompt if fields are missing
+      let refinementPrompt: string | undefined;
+      if (missingFields.length > 0) {
+        refinementPrompt = await this.generateRefinementPrompt(parsedTask, missingFields);
+      }
 
-    const readyToCreateResponse: ReadyToCreateResponse = {
-      response: `I'll create the task: "${parsedTask.title}"${parsedTask.due_date ? ` (Due: ${parsedTask.due_date})` : ''}${parsedTask.priority ? ` [${parsedTask.priority} priority]` : ''}${parsedTask.est_minutes ? ` ⏱️ ${parsedTask.est_minutes}min` : ''}`,
-      parsed_task: parsedTask,
-      ready_to_create: true
-    };
+      // Create the task immediately with optional refinement prompt
+      const taskResponse: TaskCreatedWithRefinementResponse = {
+        response: this.formatTaskCreationMessage(parsedTask),
+        parsed_task: parsedTask,
+        ready_to_create: true,
+        refinement_prompt: refinementPrompt,
+        awaiting_refinement: !!refinementPrompt,
+      };
 
-    return readyToCreateResponse;
+      return taskResponse;
 
-  } catch (error) {
-    console.error('Task parsing error:', error);
-    // Fall back to regular chat if parsing fails
-    const prompt = `The user mentioned a task but I couldn't parse it properly. Ask them to rephrase more clearly. User message: "${body.message}"`;
-    
-    const result = await this.model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-
-    const fallbackResponse: RegularChatResponse = {
-      response: text
-    };
-    
-    return fallbackResponse;
-  }
-}
-
-  private async generateNaturalClarification(parsedTask: any, missingFields: string[], originalMessage: string): Promise<string> {
-    const prompt = `
-    You are an AI assistant helping a user create a task. The user said: "${originalMessage}"
-    
-    We've parsed this into a task: ${JSON.stringify(parsedTask, null, 2)}
-    
-    However, we're missing some information: ${missingFields.join(', ')}
-    
-    Please generate a SINGLE, natural-sounding clarification question that:
-    - Sounds conversational and helpful
-    - Asks for all the missing information at once
-    - Is specific to this task context
-    - Doesn't sound robotic or like a form
-    
-    Missing fields explanation:
-    - due_date: When is this due? (tomorrow, next week, by Friday, etc.)
-    - priority: How important is this? (high/medium/low urgency)
-    - est_minutes: How long will this take? (30 minutes, 2 hours, etc.)
-    - invalid_est_minutes: The time estimate provided doesn't make sense
-    
-    Examples of good clarification questions:
-    - "Got it! To schedule this properly, when would you like to complete '${parsedTask.title}' and how urgent is it?"
-    - "I can add '${parsedTask.title}' to your tasks. When should this be done by, and about how long will it take?"
-    - "For '${parsedTask.title}', could you let me know when you'd like to finish this and how important it is compared to your other tasks?"
-    - "I'd like to make sure I schedule '${parsedTask.title}' properly. When's your deadline and about how much time should I block off for it?"
-    
-    Your natural clarification question:`;
-
-    try {
+    } catch (error) {
+      console.error('Task parsing error:', error);
+      // Fall back to regular chat if parsing fails
+      const prompt = `The user mentioned a task but I couldn't parse it properly. Ask them to rephrase more clearly. User message: "${body.message}"`;
+      
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
-      let text = response.text().trim();
+      const text = response.text();
 
-      // Clean up any markdown or quotes that might appear
-      text = text.replace(/^["']|["']$/g, ''); // Remove surrounding quotes
-      text = text.replace(/```[\s\S]*?```/g, ''); // Remove code blocks
-      text = text.trim();
-
-      return text;
-    } catch (error) {
-      console.error('Error generating natural clarification:', error);
-      // Fallback to simple question
-      if (missingFields.includes('invalid_est_minutes')) {
-        return "How much time should I allocate for this task?";
-      }
-      return "Could you provide a bit more detail about when you'd like to complete this and how important it is?";
+      const fallbackResponse: RegularChatResponse = {
+        response: text
+      };
+      
+      return fallbackResponse;
     }
+  }
+
+  /**
+   * Detect and parse multiple tasks from a single message
+   */
+  private async detectAndParseMultipleTasks(message: string): Promise<{
+    isMultiple: boolean;
+    tasks: Array<{
+      title: string;
+      notes?: string;
+      due_date?: string;
+      priority: 'low' | 'med' | 'high';
+      est_minutes?: number;
+    }>;
+  }> {
+    try {
+      const prompt = `
+      Analyze this message and determine if the user is describing MULTIPLE separate tasks.
+      
+      Message: "${message}"
+      Current date: ${new Date().toISOString().split('T')[0]}
+
+      Signs of multiple tasks:
+      - Words like "and", "also", "as well", "plus"
+      - Comma-separated items
+      - Multiple deadlines mentioned
+      - Different subjects/topics mentioned
+
+      If MULTIPLE tasks are detected, parse each one with smart defaults.
+      If only ONE task, return isMultiple: false.
+
+      SMART DEFAULTS (apply to each task):
+      - "exam/test/final" → priority: "high", est_minutes: 120
+      - "homework/assignment" → priority: "med", est_minutes: 60
+      - "project" → priority: "high", est_minutes: 120
+      - Default priority: "med"
+      - Default est_minutes: 60
+
+      Return ONLY valid JSON:
+      {
+        "isMultiple": true/false,
+        "tasks": [
+          {
+            "title": "clear task title",
+            "notes": "context or null",
+            "due_date": "YYYY-MM-DD or null",
+            "priority": "low/med/high",
+            "est_minutes": number
+          }
+        ]
+      }
+
+      Examples:
+      - "exam tomorrow and cs 484 project due friday" → isMultiple: true, 2 tasks
+      - "study for my test" → isMultiple: false, 1 task
+      - "I have homework, a paper to write, and need to prepare for a presentation" → isMultiple: true, 3 tasks
+
+      JSON:`;
+
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text().trim();
+      
+      const cleanJson = text.replace(/```json\n?|\n?```/g, '');
+      const parsed = JSON.parse(cleanJson);
+
+      // Apply defaults to each task
+      if (parsed.tasks && Array.isArray(parsed.tasks)) {
+        parsed.tasks = parsed.tasks.map((task: any) => ({
+          title: task.title,
+          notes: task.notes || null,
+          due_date: task.due_date || null,
+          priority: task.priority || 'med',
+          est_minutes: task.est_minutes || 60,
+        }));
+      }
+
+      return {
+        isMultiple: parsed.isMultiple === true && parsed.tasks?.length > 1,
+        tasks: parsed.tasks || [],
+      };
+    } catch (error) {
+      console.error('Multi-task detection error:', error);
+      return { isMultiple: false, tasks: [] };
+    }
+  }
+
+  /**
+   * Format a multi-task response
+   */
+  private createMultiTaskResponse(tasks: Array<{
+    title: string;
+    notes?: string;
+    due_date?: string;
+    priority: 'low' | 'med' | 'high';
+    est_minutes?: number;
+  }>): MultiTaskResponse {
+    let message = `✅ I'll create **${tasks.length} tasks** for you:\n\n`;
+    
+    tasks.forEach((task, index) => {
+      const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'med' ? '🟡' : '🟢';
+      message += `**${index + 1}. ${task.title}** ${priorityEmoji}\n`;
+      if (task.due_date) message += `   📅 Due: ${task.due_date}\n`;
+      if (task.est_minutes) message += `   ⏱️ ~${task.est_minutes} min\n`;
+      message += '\n';
+    });
+
+    message += `\nAll tasks have been added to your task list!`;
+
+    return {
+      response: message,
+      tasks,
+      ready_to_create: true,
+      is_multi_task: true,
+    };
+  }
+
+  /**
+   * Format a single task creation message
+   */
+  private formatTaskCreationMessage(task: any): string {
+    const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'med' ? '🟡' : '🟢';
+    let message = `✅ Created: **${task.title}** ${priorityEmoji}`;
+    
+    const details: string[] = [];
+    if (task.due_date) details.push(`Due: ${task.due_date}`);
+    if (task.est_minutes) details.push(`~${task.est_minutes} min`);
+    
+    if (details.length > 0) {
+      message += `\n${details.join(' • ')}`;
+    }
+    
+    if (task.notes) {
+      message += `\n📝 ${task.notes}`;
+    }
+    
+    return message;
+  }
+
+  /**
+   * Generate a single, concise refinement prompt for missing fields
+   * This is asked AFTER the task is created, not before
+   */
+  private async generateRefinementPrompt(task: any, missingFields: string[]): Promise<string> {
+    // Build a simple, direct question based on what's missing
+    const questions: string[] = [];
+    
+    if (missingFields.includes('due_date')) {
+      questions.push('when is it due');
+    }
+    if (missingFields.includes('est_minutes')) {
+      questions.push('how long it might take');
+    }
+    
+    if (questions.length === 0) return '';
+    
+    // Create a natural-sounding single question
+    const questionText = questions.join(' and ');
+    return `\n\n💬 Want to add more details? Just tell me ${questionText}, or say "looks good" to keep it as is.`;
   }
 
   private async handleClarificationResponse(body: InsertMessageDto): Promise<ChatResponse> {
     try {
       const prompt = `
-      You are helping complete a task creation. The user previously provided a partial task, and now they're providing clarification.
+      You are completing a task creation. The user previously started creating a task, and now they're providing more information.
 
       Original partial task: ${JSON.stringify(body.partialTask)}
-      User's clarification: "${body.message}"
+      User's response: "${body.message}"
+      Current date: ${new Date().toISOString().split('T')[0]}
 
-      Update the task with the clarification information. Return ONLY valid JSON in this exact format:
+      Merge the new information with the original task. Use smart defaults for anything still missing.
+      
+      IMPORTANT: 
+      - DO NOT ask more questions - just create the task with sensible defaults
+      - If priority is missing, default to "med"
+      - If est_minutes is missing, estimate based on task type (default 60)
+      - If due_date is missing, leave as null (that's okay!)
+
+      Return ONLY valid JSON:
       {
         "title": "string (required)",
-        "notes": "string (optional)",
+        "notes": "string or null",
         "due_date": "YYYY-MM-DD or null",
-        "priority": "low/med/high or null",
-        "est_minutes": "number or null",
-        "clarification_needed": "boolean",
-        "clarification_question": "string if clarification_needed is true"
+        "priority": "low/med/high",
+        "est_minutes": number,
+        "clarification_needed": false,
+        "clarification_question": null
       }
 
-      Rules:
-      - Keep the original title: "${body.partialTask.title}" - do not change it unless the user explicitly says to
-      - Extract priority from: "high/urgent/important/critical" = "high", "medium/normal/standard" = "med", "low/not urgent" = "low"
-      - Extract time estimates: "20 minutes/20 mins/20m" = 20, "1 hour/1hr" = 60, "2 hours/2hrs" = 120
-      - Extract due dates from: "tomorrow", "next week", "by friday" (but prefer the original due_date if it exists)
-      - Current date: ${new Date().toISOString().split('T')[0]}
-      - Only set clarification_needed to true if critical information is still missing after this update
-      - If clarification is still needed, make the question natural and conversational
-
-      Examples:
-      - Clarification "high priority" => updates priority to "high"
-      - Clarification "30 minutes" => updates est_minutes to 30
-      - Clarification "high, 1 hour" => updates priority to "high" and est_minutes to 60
-
-      Updated task JSON:`;
+      JSON:`;
 
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
@@ -402,30 +568,12 @@ private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> 
 
       console.log('Updated task after clarification:', updatedTask);
 
-      // Apply our validation logic to the updated task
-      let needsClarification = updatedTask.clarification_needed;
-      let clarificationQuestion = updatedTask.clarification_question;
-
-      const missingFields: string[] = [];
-      if (!updatedTask.priority) missingFields.push('priority');
-      if (!updatedTask.est_minutes) missingFields.push('est_minutes');
-
-      if (missingFields.length > 0 && !needsClarification) {
-        needsClarification = true;
-        clarificationQuestion = await this.generateNaturalClarification(updatedTask, missingFields, body.message);
-      }
-
-      if (needsClarification) {
-        const clarificationResponse: ClarificationNeededResponse = {
-          response: clarificationQuestion,
-          needs_clarification: true,
-          partial_task: updatedTask
-        };
-        return clarificationResponse;
-      }
+      // Apply defaults - never ask more questions
+      if (!updatedTask.priority) updatedTask.priority = 'med';
+      if (!updatedTask.est_minutes) updatedTask.est_minutes = 60;
 
       const readyToCreateResponse: ReadyToCreateResponse = {
-        response: `✅ Task created: "${updatedTask.title}"${updatedTask.due_date ? ` (Due: ${updatedTask.due_date})` : ''}${updatedTask.priority ? ` [${updatedTask.priority} priority]` : ''}${updatedTask.est_minutes ? ` ⏱️ ${updatedTask.est_minutes}min` : ''}`,
+        response: this.formatTaskCreationMessage(updatedTask),
         parsed_task: updatedTask,
         ready_to_create: true
       };
@@ -434,13 +582,23 @@ private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse> 
 
     } catch (error) {
       console.error('Clarification processing error:', error);
-      // If clarification fails, fall back to asking for the original information
-      const fallbackResponse: ClarificationNeededResponse = {
-        response: "I still need to know the priority and estimated time for this task. Could you provide those details?",
-        needs_clarification: true,
-        partial_task: body.partialTask
+      
+      // Even on error, try to create with what we have
+      const fallbackTask = {
+        title: body.partialTask?.title || body.message,
+        priority: 'med' as const,
+        est_minutes: 60,
+        due_date: body.partialTask?.due_date || null,
+        notes: body.partialTask?.notes || null,
       };
-      return fallbackResponse;
+      
+      const readyToCreateResponse: ReadyToCreateResponse = {
+        response: this.formatTaskCreationMessage(fallbackTask),
+        parsed_task: fallbackTask,
+        ready_to_create: true
+      };
+      
+      return readyToCreateResponse;
     }
   }
 }

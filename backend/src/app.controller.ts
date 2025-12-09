@@ -7,7 +7,7 @@ import { SupabaseAuthGuard } from './auth/supabase.guard';
 import { AuthService } from './auth/auth.service';
 import { EnsureUserDto } from './auth/dto/ensure-user.dto';
 import { TasksService } from './tasks/tasks.service';
-import { ReadyToCreateResponse, ChatResponse } from './gemini/types/chat-response.types';
+import { ReadyToCreateResponse, ChatResponse, MultiTaskResponse } from './gemini/types/chat-response.types';
 import { CalendarService } from './calendar/calendar.service';
 
 @Controller('api')
@@ -28,7 +28,7 @@ export class AppController {
     console.log('Context:', body.context);
     console.log('Partial task:', body.partialTask);
 
-    const response: ChatResponse = await this.geminiService.generateResponse({
+    const response = await this.geminiService.generateResponse({
       ...body,
       userId: req.user?.id,
     });
@@ -120,9 +120,15 @@ export class AppController {
     return response;
   }
 
-  // Type guard to check if response is ReadyToCreateResponse
+  // Type guard to check if response is ReadyToCreateResponse (single task)
   private isReadyToCreateResponse(response: ChatResponse): response is ReadyToCreateResponse {
-    return (response as ReadyToCreateResponse).ready_to_create === true;
+    return (response as ReadyToCreateResponse).ready_to_create === true && 
+           !('is_multi_task' in response);
+  }
+  
+  // Type guard to check if response is MultiTaskResponse
+  private isMultiTaskResponse(response: ChatResponse): response is MultiTaskResponse {
+    return (response as MultiTaskResponse).is_multi_task === true;
   }
 
   @Post('auth/ensure-user')

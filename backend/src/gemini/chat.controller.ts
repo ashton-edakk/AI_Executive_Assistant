@@ -1,5 +1,5 @@
 import { Body, Controller, Post, UseGuards, Req, HttpException } from '@nestjs/common';
-import { GeminiService } from './gemini.service';
+import { GeminiService, MultiTaskResponse } from './gemini.service';
 import { TasksService } from '../tasks/tasks.service';
 import { SupabaseAuthGuard } from '../auth/supabase.guard';
 import { PlannerService } from '../planning/services/planner.service';
@@ -13,6 +13,11 @@ interface ChatRequest {
     active: boolean;
     partial_task: any;
     original_message: string;
+  };
+  refinement_state?: {
+    active: boolean;
+    task_id: string;
+    task_title: string;
   };
 }
 
@@ -66,6 +71,11 @@ export class ChatController {
         return await this.handlePlanningRequest(userId, body.message);
       }
 
+      // Check if this is a refinement response (user providing more details for a created task)
+      if (body.refinement_state?.active && body.refinement_state?.task_id) {
+        return await this.handleRefinementResponse(userId, body.message, body.refinement_state);
+      }
+
       // Build the message DTO for Gemini
       const geminiInput = {
         message: body.message,
@@ -77,9 +87,53 @@ export class ChatController {
       // Get response from Gemini
       const geminiResponse = await this.geminiService.generateResponse(geminiInput);
 
-      // Check if this is a ready-to-create task response
+      // Check if this is a multi-task response
+      if ('is_multi_task' in geminiResponse && geminiResponse.is_multi_task) {
+        const multiTaskResponse = geminiResponse as MultiTaskResponse;
+        const createdTasks: any[] = [];
+        const failedTasks: any[] = [];
+
+        for (const task of multiTaskResponse.tasks) {
+          try {
+            const createdTask = await this.tasksService.createTask({
+              title: task.title,
+              user_id: userId,
+              notes: task.notes ?? undefined,
+              priority: task.priority || 'med',
+              due_date: task.due_date ?? undefined,
+              est_minutes: task.est_minutes ?? undefined,
+              status: 'todo',
+            });
+            createdTasks.push(createdTask);
+          } catch (taskError: any) {
+            console.error('Failed to create task:', task.title, taskError);
+            failedTasks.push({ task, error: taskError.message });
+          }
+        }
+
+        let responseMessage = multiTaskResponse.response;
+        if (failedTasks.length > 0) {
+          responseMessage += `\n\n⚠️ Failed to create ${failedTasks.length} task(s).`;
+        }
+
+        return {
+          response: responseMessage,
+          tasks: createdTasks,
+          ready_to_create: true,
+          task_created: createdTasks.length > 0,
+          is_multi_task: true,
+          created_count: createdTasks.length,
+          failed_count: failedTasks.length,
+        };
+      }
+
+      // Check if this is a single ready-to-create task response
       if ('ready_to_create' in geminiResponse && geminiResponse.ready_to_create && 'parsed_task' in geminiResponse) {
         const parsedTask = geminiResponse.parsed_task;
+        
+        // Check for refinement prompt
+        const refinementPrompt = 'refinement_prompt' in geminiResponse ? geminiResponse.refinement_prompt : undefined;
+        const awaitingRefinement = 'awaiting_refinement' in geminiResponse ? geminiResponse.awaiting_refinement : false;
         
         try {
           // Create the task in the database
@@ -93,12 +147,24 @@ export class ChatController {
             status: 'todo',
           });
 
+          // Include refinement prompt if there is one
+          const fullResponse = refinementPrompt 
+            ? `${geminiResponse.response}${refinementPrompt}`
+            : geminiResponse.response;
+
           return {
-            response: geminiResponse.response,
+            response: fullResponse,
             parsed_task: parsedTask,
             ready_to_create: true,
             task_created: true,
             task: createdTask,
+            // Include refinement state for frontend to track
+            awaiting_refinement: awaitingRefinement,
+            refinement_state: awaitingRefinement ? {
+              active: true,
+              task_id: createdTask.id,
+              task_title: createdTask.title,
+            } : undefined,
           };
         } catch (taskError: any) {
           console.error('Failed to create task:', taskError);
@@ -532,6 +598,78 @@ In the Tasks panel:
       return {
         response: `I couldn't fetch your accomplishments. ${error.message || 'Please try again.'}`,
         error: error.message,
+      };
+    }
+  }
+
+  private async handleRefinementResponse(
+    userId: string, 
+    message: string, 
+    refinementState: { task_id: string; task_title: string }
+  ) {
+    try {
+      const lowerMessage = message.toLowerCase();
+      
+      // Check if user wants to skip refinement
+      if (lowerMessage.includes('looks good') || 
+          lowerMessage.includes('that\'s fine') || 
+          lowerMessage.includes('keep it') ||
+          lowerMessage.includes('no changes') ||
+          lowerMessage === 'ok' ||
+          lowerMessage === 'okay') {
+        return {
+          response: `👍 Got it! "${refinementState.task_title}" is all set.`,
+          refinement_complete: true,
+        };
+      }
+
+      // Parse the refinement message to extract updates
+      const parseResult = await this.geminiService.parseEditRequest(
+        `Update task "${refinementState.task_title}": ${message}`,
+        refinementState.task_title
+      );
+
+      const updates: any = {};
+      let changeDescription = '';
+
+      if (parseResult.newDueDate) {
+        updates.due_date = parseResult.newDueDate;
+        changeDescription += `📅 Due: ${parseResult.newDueDate}\n`;
+      }
+
+      if (parseResult.newEstMinutes) {
+        updates.est_minutes = parseResult.newEstMinutes;
+        changeDescription += `⏱️ Time: ~${parseResult.newEstMinutes} min\n`;
+      }
+
+      if (parseResult.newPriority) {
+        updates.priority = parseResult.newPriority;
+        const emoji = parseResult.newPriority === 'high' ? '🔴' : parseResult.newPriority === 'med' ? '🟡' : '🟢';
+        changeDescription += `${emoji} Priority: ${parseResult.newPriority}\n`;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return {
+          response: `I couldn't understand those details. Try something like "due tomorrow, 2 hours" or "looks good" to keep it as is.`,
+          refinement_complete: false,
+        };
+      }
+
+      // Update the task
+      await this.tasksService.updateTask(refinementState.task_id, updates);
+
+      return {
+        response: `✅ Updated "${refinementState.task_title}":\n${changeDescription}`,
+        task_updated: true,
+        refinement_complete: true,
+        updates,
+      };
+    } catch (error: any) {
+      console.error('Refinement error:', error);
+      return {
+        response: `I couldn't update the task. ${error.message || 'Please try again.'}`,
+        error: error.message,
+        refinement_complete: true, // End the refinement flow on error
       };
     }
   }
