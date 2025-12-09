@@ -94,25 +94,6 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     return message;
   };
 
-  const formatClarificationRequest = (aiResponse: any): string => {
-    if (!aiResponse?.clarification_prompt) {
-      return "I need a bit more information to create this task. Can you clarify what you mean?";
-    }
-
-    let message = `🤔 I need a bit more information:\n\n${aiResponse.clarification_prompt}\n`;
-
-    if (aiResponse.missing_fields && aiResponse.missing_fields.length > 0) {
-      message += `\nMissing details:\n`;
-      aiResponse.missing_fields.forEach((field: string) => {
-        message += `- ${field}\n`;
-      });
-    }
-
-    message += `\nPlease reply with the missing information in one message.`;
-
-    return message;
-  };
-
   const loadChatHistory = async (): Promise<void> => {
     if (!session?.user?.id) {
       setMessages([getSignInWelcomeMessage()]);
