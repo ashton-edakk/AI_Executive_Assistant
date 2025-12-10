@@ -91,45 +91,65 @@ Respond now:`;
   }
 
   looksLikeTaskCreation(message: string): boolean {
-    const lowerMessage = message.toLowerCase();
+    const lowerMessage = message.toLowerCase().trim();
     
     // Don't treat planning requests as task creation
     if (this.looksLikePlanningRequest(lowerMessage)) {
       return false;
     }
     
-    // Explicit task creation keywords
+    // EXCLUDE: Simple greetings and short messages
+    const greetings = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'thanks', 'thank you', 'ok', 'okay', 'yes', 'no', 'sure'];
+    if (greetings.some(g => lowerMessage === g || lowerMessage === g + '!')) {
+      return false;
+    }
+    
+    // EXCLUDE: Questions asking for advice/recommendations (not task creation)
+    const questionPatterns = [
+      /^how (long|much|many|often|do i|should|can|would)/,
+      /^what (should|can|would|do you|is the|are the)/,
+      /^when (should|can|would|do i)/,
+      /^where (should|can|would|do i)/,
+      /^why (should|do|is|are)/,
+      /^can (you|i|we)/,
+      /^should (i|we)/,
+      /^do (you|i|we)/,
+      /^is (it|this|there|that)/,
+      /^are (there|you|we)/,
+      /\?$/, // Ends with question mark
+    ];
+    
+    if (questionPatterns.some(pattern => pattern.test(lowerMessage))) {
+      // Exception: if question contains explicit task keywords, still treat as task
+      const explicitInQuestion = ['create a task', 'add a task', 'make a task', 'remind me'];
+      if (!explicitInQuestion.some(kw => lowerMessage.includes(kw))) {
+        return false;
+      }
+    }
+    
+    // Explicit task creation keywords - MUST be present for task creation
     const explicitTaskKeywords = [
-      'create', 'add', 'new task', 'make a task', 
-      'remind me to', 'i need to', 'todo:', 'task:',
-      'set a task', 'add to my tasks', 'i have to',
-      'create task', 'add task', 'make task'
+      'create a task', 'create task', 'add a task', 'add task', 
+      'new task', 'make a task', 'make task',
+      'remind me to', 'i need to do', 'i have to do',
+      'todo:', 'task:', 'set a task', 'add to my tasks',
+      'schedule a', 'schedule my', 'put on my calendar'
     ];
     
-    // Context keywords that suggest task creation
-    const contextKeywords = [
-      'exam', 'test', 'quiz', 'midterm', 'final',
-      'project', 'homework', 'assignment', 'paper', 'essay',
-      'deadline', 'due', 'submit', 'turn in',
-      'study for', 'prepare for', 'finish', 'complete',
-      'meeting', 'call', 'appointment',
-      'work on', 'start', 'begin',
-      'by tomorrow', 'by friday', 'by next week', 'by monday',
-      'this week', 'today', 'tonight'
-    ];
-    
-    // Check explicit keywords first
+    // Check explicit keywords - these always trigger task creation
     if (explicitTaskKeywords.some(keyword => lowerMessage.includes(keyword))) {
       return true;
     }
     
-    // Check context keywords - need at least one to trigger task creation
-    const hasContextKeyword = contextKeywords.some(keyword => lowerMessage.includes(keyword));
+    // For statements (not questions), check for action + deadline patterns
+    // These indicate the user wants to CREATE a task, not just discuss it
+    const actionDeadlinePattern = /\b(i have|i've got|i need|got to|gotta|must)\b.+\b(by|due|before|until|on)\s+(today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|\d+\s+days?)/i;
     
-    // Additional check: if message mentions multiple things with "and" or commas, likely tasks
-    const hasMultipleItems = (lowerMessage.includes(' and ') || lowerMessage.includes(', ')) && hasContextKeyword;
+    if (actionDeadlinePattern.test(message)) {
+      return true;
+    }
     
-    return hasContextKeyword || hasMultipleItems;
+    return false;
   }
 
   looksLikePlanningRequest(message: string): boolean {
@@ -466,15 +486,14 @@ JSON:`;
       // Track which fields are missing to build a smart refinement prompt
       const missingFields: string[] = [];
       
-      if (!parsedTask.due_date) {
-        missingFields.push('due date');
-      }
-      if (!parsedTask.est_minutes || parsedTask.est_minutes <= 0) {
-        missingFields.push('time estimate');
-      }
-      if (!parsedTask.priority) {
-        missingFields.push('priority');
-      }
+      // Check what's actually missing (before applying defaults)
+      const hasDueDate = !!parsedTask.due_date;
+      const hasEstMinutes = parsedTask.est_minutes && parsedTask.est_minutes > 0;
+      const hasPriority = !!parsedTask.priority;
+      
+      if (!hasDueDate) missingFields.push('due date');
+      if (!hasEstMinutes) missingFields.push('time estimate');
+      if (!hasPriority) missingFields.push('priority');
       
       // Apply defaults for task creation (but still track what was missing for refinement)
       if (!parsedTask.priority) {
@@ -494,11 +513,17 @@ JSON:`;
         }
       }
 
-      // Generate refinement prompt ONLY for missing fields
+      // Generate refinement prompt for ALL missing fields together
       let refinementPrompt: string | undefined;
       if (missingFields.length > 0) {
-        const missingList = missingFields.join(', ');
-        refinementPrompt = `\n\n💬 Want to add ${missingList}? (Or say "looks good" to keep defaults)`;
+        // If ANY field is missing, ask for all missing ones at once
+        if (missingFields.length === 3) {
+          refinementPrompt = `\n\n💬 Want to add details? Tell me the due date, time estimate, and priority. (Or say "looks good" to keep defaults)`;
+        } else if (missingFields.length === 2) {
+          refinementPrompt = `\n\n💬 Want to add ${missingFields[0]} and ${missingFields[1]}? (Or say "looks good" to keep defaults)`;
+        } else {
+          refinementPrompt = `\n\n💬 Want to add ${missingFields[0]}? (Or say "looks good" to keep defaults)`;
+        }
       }
 
       // Create the task immediately with optional refinement prompt
@@ -578,6 +603,14 @@ JSON:`;
         due_date = new Date(today.getTime() + daysUntil * 86400000).toISOString().split('T')[0];
       }
       
+      // Track what was explicitly mentioned
+      const hasPriorityMentioned = lowerMessage.includes('urgent') || lowerMessage.includes('important') || 
+                                    lowerMessage.includes('high priority') || lowerMessage.includes('low priority') ||
+                                    lowerMessage.includes('medium priority');
+      const hourMatch = lowerMessage.match(/(\d+)\s*(?:hour|hr|h)\b/);
+      const minuteMatch = lowerMessage.match(/(\d+)\s*(?:minute|min|m)\b/);
+      const hasTimeMentioned = !!(hourMatch || minuteMatch);
+      
       // Infer priority only if explicitly mentioned
       let priority: 'low' | 'med' | 'high' = 'med';
       if (lowerMessage.includes('urgent') || lowerMessage.includes('important') || lowerMessage.includes('high priority')) {
@@ -588,8 +621,6 @@ JSON:`;
       
       // Infer time only if mentioned, otherwise use defaults based on task type
       let est_minutes = 60;
-      const hourMatch = lowerMessage.match(/(\d+)\s*(?:hour|hr|h)\b/);
-      const minuteMatch = lowerMessage.match(/(\d+)\s*(?:minute|min|m)\b/);
       
       if (hourMatch) {
         est_minutes = parseInt(hourMatch[1]) * 60;
@@ -611,20 +642,30 @@ JSON:`;
       
       console.log('Using fallback task:', fallbackTask);
       
-      // Track missing fields
+      // Track ALL missing fields
       const missingFields: string[] = [];
       if (!due_date) missingFields.push('due date');
-      // Only note time as missing if it wasn't explicitly set and we just used a default
-      if (!hourMatch && !minuteMatch) missingFields.push('time estimate');
+      if (!hasTimeMentioned) missingFields.push('time estimate');
+      if (!hasPriorityMentioned) missingFields.push('priority');
+      
+      // Build refinement prompt for all missing fields
+      let refinementPrompt: string | undefined;
+      if (missingFields.length > 0) {
+        if (missingFields.length === 3) {
+          refinementPrompt = `\n\n💬 Want to add details? Tell me the due date, time estimate, and priority. (Or say "looks good" to keep defaults)`;
+        } else if (missingFields.length === 2) {
+          refinementPrompt = `\n\n💬 Want to add ${missingFields[0]} and ${missingFields[1]}? (Or say "looks good" to keep defaults)`;
+        } else {
+          refinementPrompt = `\n\n💬 Want to add ${missingFields[0]}? (Or say "looks good" to keep defaults)`;
+        }
+      }
       
       const taskResponse: TaskCreatedWithRefinementResponse = {
         response: this.formatTaskCreationMessage(fallbackTask),
         parsed_task: fallbackTask,
         ready_to_create: true,
-        refinement_prompt: missingFields.length > 0 
-          ? `\n\n💬 Want to add ${missingFields.join(', ')}? (Or say "looks good" to keep defaults)` 
-          : undefined,
-        awaiting_refinement: missingFields.length > 0,
+        refinement_prompt: refinementPrompt,
+        awaiting_refinement: !!refinementPrompt,
       };
       
       return taskResponse;
