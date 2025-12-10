@@ -1,10 +1,14 @@
-import { Body, Controller, Post, UseGuards, Req, HttpException } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards, Req, HttpException, Inject } from '@nestjs/common';
 import { GeminiService, MultiTaskResponse } from './gemini.service';
 import { TasksService } from '../tasks/tasks.service';
 import { SupabaseAuthGuard } from '../auth/supabase.guard';
 import { PlannerService } from '../planning/services/planner.service';
 import { InsightsService } from '../planning/services/insights.service';
+import { CalendarService } from '../calendar/calendar.service';
+import { SUPABASE_ADMIN } from '../db/supabase-admin.provider';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { DateTime } from 'luxon';
+import { v4 as uuid } from 'uuid';
 
 interface ChatRequest {
   message: string;
@@ -29,6 +33,8 @@ export class ChatController {
     private readonly tasksService: TasksService,
     private readonly plannerService: PlannerService,
     private readonly insightsService: InsightsService,
+    private readonly calendarService: CalendarService,
+    @Inject(SUPABASE_ADMIN) private readonly supabase: SupabaseClient,
   ) {}
 
   @Post()
@@ -92,6 +98,8 @@ export class ChatController {
         const multiTaskResponse = geminiResponse as MultiTaskResponse;
         const createdTasks: any[] = [];
         const failedTasks: any[] = [];
+        let calendarSuccess = 0;
+        let calendarFail = 0;
 
         for (const task of multiTaskResponse.tasks) {
           try {
@@ -105,6 +113,15 @@ export class ChatController {
               status: 'todo',
             });
             createdTasks.push(createdTask);
+
+            // Try to create calendar event for this task
+            try {
+              await this.createCalendarEventForTask(createdTask, req.user);
+              calendarSuccess++;
+            } catch (calErr) {
+              console.error('Failed to create calendar event for task:', task.title, calErr);
+              calendarFail++;
+            }
           } catch (taskError: any) {
             console.error('Failed to create task:', task.title, taskError);
             failedTasks.push({ task, error: taskError.message });
@@ -114,6 +131,18 @@ export class ChatController {
         let responseMessage = multiTaskResponse.response;
         if (failedTasks.length > 0) {
           responseMessage += `\n\n⚠️ Failed to create ${failedTasks.length} task(s).`;
+        }
+        if (calendarSuccess > 0) {
+          responseMessage += `\n\n📅 Added ${calendarSuccess} event(s) to your Google Calendar.`;
+        }
+        if (calendarFail > 0) {
+          responseMessage += `\n⚠️ Could not add ${calendarFail} event(s) to calendar.`;
+        }
+        
+        // Add refinement prompt for any tasks missing details
+        const tasksNeedingDetails = createdTasks.filter(t => !t.due_date || !t.est_minutes);
+        if (tasksNeedingDetails.length > 0) {
+          responseMessage += `\n\n💬 Want to add more details? You can say things like "update Finance Exam to 3 hours" or "set CS 484 Project due date to tomorrow".`;
         }
 
         return {
@@ -147,10 +176,20 @@ export class ChatController {
             status: 'todo',
           });
 
+          // Try to create calendar event for this task
+          let calendarNote = '';
+          try {
+            await this.createCalendarEventForTask(createdTask, req.user);
+            calendarNote = '\n\n📅 Added to your Google Calendar.';
+          } catch (calErr: any) {
+            console.error('Failed to create calendar event:', calErr);
+            calendarNote = '\n\n⚠️ Task created, but could not add to Google Calendar.';
+          }
+
           // Include refinement prompt if there is one
           const fullResponse = refinementPrompt 
-            ? `${geminiResponse.response}${refinementPrompt}`
-            : geminiResponse.response;
+            ? `${geminiResponse.response}${calendarNote}${refinementPrompt}`
+            : `${geminiResponse.response}${calendarNote}`;
 
           return {
             response: fullResponse,
@@ -671,6 +710,57 @@ In the Tasks panel:
         error: error.message,
         refinement_complete: true, // End the refinement flow on error
       };
+    }
+  }
+
+  /**
+   * Create a Google Calendar event for a task and store the link in task_blocks
+   * This allows the event to be deleted when the task is deleted
+   */
+  private async createCalendarEventForTask(task: any, user: any): Promise<void> {
+    const estMinutes = task.est_minutes || 60;
+    
+    // Calculate start time based on due_date or now
+    let startDate: Date;
+    if (task.due_date) {
+      // Schedule at 9 AM on the due date
+      startDate = new Date(`${task.due_date}T09:00:00`);
+    } else {
+      // Schedule 5 minutes from now
+      startDate = new Date(Date.now() + 5 * 60 * 1000);
+    }
+    const endDate = new Date(startDate.getTime() + estMinutes * 60 * 1000);
+
+    // Create the Google Calendar event
+    const calendarEvent = await this.calendarService.createEvent(
+      {
+        id: user.id,
+        provider_token: user.provider_token,
+      },
+      {
+        start: startDate.toISOString(),
+        end: endDate.toISOString(),
+        summary: task.title,
+        description: task.notes || `Task created via AI Executive Assistant`,
+        extendedPrivate: {
+          task_id: task.id,
+        },
+      },
+    );
+
+    // Store the link in task_blocks so we can delete the event when the task is deleted
+    if (calendarEvent?.id) {
+      const blockId = uuid();
+      await this.supabase.from('task_blocks').insert({
+        id: blockId,
+        user_id: task.user_id,
+        task_id: task.id,
+        start_ts: startDate.toISOString(),
+        end_ts: endDate.toISOString(),
+        google_event_id: calendarEvent.id,
+        state: 'confirmed',
+        buffer_minutes: 0,
+      });
     }
   }
 }
