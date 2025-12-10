@@ -79,7 +79,14 @@ export class ChatController {
 
       // Check if this is a refinement response (user providing more details for a created task)
       if (body.refinement_state?.active && body.refinement_state?.task_id) {
-        return await this.handleRefinementResponse(userId, body.message, body.refinement_state);
+        // But first, check if the user is actually creating a NEW task instead of refining
+        // If the message looks like a new task creation, ignore refinement state
+        if (this.geminiService.looksLikeTaskCreation(body.message)) {
+          console.log('User is creating a new task, ignoring refinement state');
+          // Fall through to normal task creation
+        } else {
+          return await this.handleRefinementResponse(userId, body.message, body.refinement_state);
+        }
       }
 
       // Build the message DTO for Gemini
@@ -647,31 +654,31 @@ In the Tasks panel:
     refinementState: { task_id: string; task_title: string }
   ) {
     try {
-      const lowerMessage = message.toLowerCase();
+      const lowerMessage = message.toLowerCase().trim();
       
       // Check if user wants to skip refinement
       if (lowerMessage.includes('looks good') || 
           lowerMessage.includes('that\'s fine') || 
           lowerMessage.includes('keep it') ||
           lowerMessage.includes('no changes') ||
+          lowerMessage.includes('no deadline') ||
           lowerMessage === 'ok' ||
-          lowerMessage === 'okay') {
+          lowerMessage === 'okay' ||
+          lowerMessage === 'skip' ||
+          lowerMessage === 'done') {
         return {
           response: `👍 Got it! "${refinementState.task_title}" is all set.`,
           refinement_complete: true,
         };
       }
 
-      // Parse the refinement message to extract updates
-      const parseResult = await this.geminiService.parseEditRequest(
-        `Update task "${refinementState.task_title}": ${message}`,
-        refinementState.task_title
-      );
+      // Use the new simple refinement parser (handles "due sunday", "2 hours", etc.)
+      const parseResult = await this.geminiService.parseRefinementResponse(message);
 
       const updates: any = {};
       let changeDescription = '';
 
-      if (parseResult.newDueDate) {
+      if (parseResult.newDueDate && parseResult.newDueDate !== 'none') {
         updates.due_date = parseResult.newDueDate;
         changeDescription += `📅 Due: ${parseResult.newDueDate}\n`;
       }
@@ -689,7 +696,7 @@ In the Tasks panel:
 
       if (Object.keys(updates).length === 0) {
         return {
-          response: `I couldn't understand those details. Try something like "due tomorrow, 2 hours" or "looks good" to keep it as is.`,
+          response: `I couldn't understand that. Try:\n• "due sunday" or "tomorrow"\n• "2 hours" or "30 minutes"\n• "high priority"\n• "looks good" to keep it as is`,
           refinement_complete: false,
         };
       }

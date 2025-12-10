@@ -90,7 +90,7 @@ Respond now:`;
     }
   }
 
-  private looksLikeTaskCreation(message: string): boolean {
+  looksLikeTaskCreation(message: string): boolean {
     const lowerMessage = message.toLowerCase();
     
     // Don't treat planning requests as task creation
@@ -250,6 +250,85 @@ Respond now:`;
     }
   }
 
+  /**
+   * Parse a simple refinement response (e.g., "due sunday", "2 hours", "high priority")
+   * This is more lenient than parseEditRequest and handles simple phrases
+   */
+  async parseRefinementResponse(message: string): Promise<{
+    newPriority: 'low' | 'med' | 'high' | null;
+    newDueDate: string | null;
+    newEstMinutes: number | null;
+  }> {
+    const lowerMessage = message.toLowerCase().trim();
+    
+    // Calculate dates
+    const today = new Date();
+    const currentDate = today.toISOString().split('T')[0];
+    const tomorrow = new Date(today.getTime() + 86400000).toISOString().split('T')[0];
+    
+    const dayOfWeek = today.getDay();
+    const daysUntilSunday = (7 - dayOfWeek) % 7 || 7;
+    const daysUntilMonday = (8 - dayOfWeek) % 7 || 7;
+    const daysUntilTuesday = (9 - dayOfWeek) % 7 || 7;
+    const daysUntilWednesday = (10 - dayOfWeek) % 7 || 7;
+    const daysUntilThursday = (11 - dayOfWeek) % 7 || 7;
+    const daysUntilFriday = (12 - dayOfWeek) % 7 || 7;
+    const daysUntilSaturday = (13 - dayOfWeek) % 7 || 7;
+    
+    let newDueDate: string | null = null;
+    let newEstMinutes: number | null = null;
+    let newPriority: 'low' | 'med' | 'high' | null = null;
+    
+    // Parse due date from common phrases
+    if (lowerMessage.includes('today') || lowerMessage.includes('tonight')) {
+      newDueDate = currentDate;
+    } else if (lowerMessage.includes('tomorrow')) {
+      newDueDate = tomorrow;
+    } else if (lowerMessage.includes('sunday')) {
+      newDueDate = new Date(today.getTime() + daysUntilSunday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('monday')) {
+      newDueDate = new Date(today.getTime() + daysUntilMonday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('tuesday')) {
+      newDueDate = new Date(today.getTime() + daysUntilTuesday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('wednesday')) {
+      newDueDate = new Date(today.getTime() + daysUntilWednesday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('thursday')) {
+      newDueDate = new Date(today.getTime() + daysUntilThursday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('friday')) {
+      newDueDate = new Date(today.getTime() + daysUntilFriday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('saturday')) {
+      newDueDate = new Date(today.getTime() + daysUntilSaturday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('next week')) {
+      newDueDate = new Date(today.getTime() + daysUntilMonday * 86400000).toISOString().split('T')[0];
+    } else if (lowerMessage.includes('no deadline') || lowerMessage.includes('no due')) {
+      newDueDate = 'none'; // Special marker to indicate explicitly no deadline
+    }
+    
+    // Parse time estimates
+    const hourMatch = lowerMessage.match(/(\d+)\s*(?:hour|hr|h)\b/);
+    const minuteMatch = lowerMessage.match(/(\d+)\s*(?:minute|min|m)\b/);
+    
+    if (hourMatch) {
+      newEstMinutes = parseInt(hourMatch[1]) * 60;
+    }
+    if (minuteMatch) {
+      newEstMinutes = (newEstMinutes || 0) + parseInt(minuteMatch[1]);
+    }
+    
+    // Parse priority
+    if (lowerMessage.includes('high') || lowerMessage.includes('urgent') || lowerMessage.includes('important')) {
+      newPriority = 'high';
+    } else if (lowerMessage.includes('medium') || lowerMessage.includes('med') || lowerMessage.includes('normal')) {
+      newPriority = 'med';
+    } else if (lowerMessage.includes('low')) {
+      newPriority = 'low';
+    }
+    
+    console.log('Parsed refinement:', { newDueDate, newEstMinutes, newPriority, original: message });
+    
+    return { newPriority, newDueDate, newEstMinutes };
+  }
+
   private async handleTaskCreation(body: InsertMessageDto): Promise<ChatResponse | MultiTaskResponse> {
     try {
       // Check if this is a clarification response to a previous task
@@ -267,6 +346,20 @@ Respond now:`;
       // Single task parsing with smart defaults - NEVER ask questions, ALWAYS create the task
       const currentDate = new Date().toISOString().split('T')[0];
       const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      
+      // Calculate day of week dates
+      const today = new Date();
+      const dayOfWeek = today.getDay(); // 0=Sunday, 1=Monday, etc.
+      const daysUntilSunday = (7 - dayOfWeek) % 7 || 7;
+      const daysUntilMonday = (8 - dayOfWeek) % 7 || 7;
+      const daysUntilFriday = (12 - dayOfWeek) % 7 || 7;
+      const daysUntilSaturday = (13 - dayOfWeek) % 7 || 7;
+      
+      const nextSunday = new Date(today.getTime() + daysUntilSunday * 86400000).toISOString().split('T')[0];
+      const nextMonday = new Date(today.getTime() + daysUntilMonday * 86400000).toISOString().split('T')[0];
+      const nextFriday = new Date(today.getTime() + daysUntilFriday * 86400000).toISOString().split('T')[0];
+      const nextSaturday = new Date(today.getTime() + daysUntilSaturday * 86400000).toISOString().split('T')[0];
+      
       const prompt = `
 Parse this task and return ONLY valid JSON. DO NOT ask questions. ALWAYS create the task.
 
@@ -274,29 +367,26 @@ User input: "${body.message}"
 Today's date: ${currentDate}
 Tomorrow's date: ${tomorrow}
 
-RULES:
-1. ALWAYS set clarification_needed to false
-2. ALWAYS provide a title - extract the main thing to do
-3. ALWAYS estimate time based on task type:
-   - exam/test/study: 120 minutes
-   - project/homework: 90 minutes
-   - meeting/call: 30 minutes
-   - email/quick task: 15 minutes
-   - default: 60 minutes
-4. Set priority based on context:
-   - exam/test/deadline soon: "high"
-   - homework/project: "med"
-   - default: "med"
-5. For dates:
-   - "tomorrow" = ${tomorrow}
-   - "friday" = calculate the next Friday from ${currentDate}
-   - If no date mentioned, set to null
+DATE REFERENCE (use these exact dates):
+- "today" or "tonight" = ${currentDate}
+- "tomorrow" = ${tomorrow}
+- "sunday" = ${nextSunday}
+- "monday" = ${nextMonday}
+- "friday" = ${nextFriday}
+- "saturday" = ${nextSaturday}
 
-Return ONLY this JSON (no explanation):
+RULES:
+1. ALWAYS extract the due date if ANY time reference is mentioned (by tonight, by sunday, due friday, etc.)
+2. ALWAYS provide a title - extract the main action/task (remove the date part from title)
+3. ALWAYS estimate time: exam/study=120min, project=90min, homework=60min, call=30min, default=60min
+4. Set priority: exam/urgent="high", project/homework="med", default="med"
+5. IMPORTANT: If user says "by tonight" or "by today", use today's date (${currentDate})
+
+Return ONLY this JSON:
 {
-  "title": "the task title",
+  "title": "task title (without the date)",
   "notes": null,
-  "due_date": "YYYY-MM-DD or null",
+  "due_date": "YYYY-MM-DD" or null,
   "priority": "low" or "med" or "high",
   "est_minutes": number,
   "clarification_needed": false,
@@ -398,14 +488,16 @@ JSON:`;
         /create (?:a )?task (?:to |for )?(.+)/i,
         /add (?:a )?task (?:to |for )?(.+)/i,
         /(?:i need to|i have to|remind me to) (.+)/i,
+        /(?:i have (?:an? )?)?(.+?)(?:\s+(?:by|due|on)\s+.+)?$/i,
       ];
       
       for (const pattern of patterns) {
         const match = body.message.match(pattern);
         if (match && match[1]) {
           title = match[1].trim();
-          // Remove trailing punctuation
+          // Remove trailing punctuation and date phrases
           title = title.replace(/[.!?]+$/, '');
+          title = title.replace(/\s+(by|due|on)\s+(today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday).*$/i, '');
           // Capitalize first letter
           title = title.charAt(0).toUpperCase() + title.slice(1);
           break;
@@ -424,10 +516,35 @@ JSON:`;
         est_minutes = 90;
       }
       
+      // Try to extract due date from the message
+      let due_date: string | null = null;
+      const today = new Date();
+      const currentDate = today.toISOString().split('T')[0];
+      const tomorrow = new Date(today.getTime() + 86400000).toISOString().split('T')[0];
+      const dayOfWeek = today.getDay();
+      
+      if (lowerMessage.includes('today') || lowerMessage.includes('tonight')) {
+        due_date = currentDate;
+      } else if (lowerMessage.includes('tomorrow')) {
+        due_date = tomorrow;
+      } else if (lowerMessage.includes('sunday')) {
+        const daysUntil = (7 - dayOfWeek) % 7 || 7;
+        due_date = new Date(today.getTime() + daysUntil * 86400000).toISOString().split('T')[0];
+      } else if (lowerMessage.includes('monday')) {
+        const daysUntil = (8 - dayOfWeek) % 7 || 7;
+        due_date = new Date(today.getTime() + daysUntil * 86400000).toISOString().split('T')[0];
+      } else if (lowerMessage.includes('friday')) {
+        const daysUntil = (12 - dayOfWeek) % 7 || 7;
+        due_date = new Date(today.getTime() + daysUntil * 86400000).toISOString().split('T')[0];
+      } else if (lowerMessage.includes('saturday')) {
+        const daysUntil = (13 - dayOfWeek) % 7 || 7;
+        due_date = new Date(today.getTime() + daysUntil * 86400000).toISOString().split('T')[0];
+      }
+      
       const fallbackTask = {
         title,
         notes: null,
-        due_date: null,
+        due_date,
         priority,
         est_minutes,
         clarification_needed: false,
@@ -436,12 +553,15 @@ JSON:`;
       
       console.log('Using fallback task:', fallbackTask);
       
+      // Only ask for refinement if we couldn't extract the due date
+      const needsRefinement = !due_date;
+      
       const taskResponse: TaskCreatedWithRefinementResponse = {
         response: this.formatTaskCreationMessage(fallbackTask),
         parsed_task: fallbackTask,
         ready_to_create: true,
-        refinement_prompt: `\n\n💬 When is this due? (Or say "no deadline" to skip)`,
-        awaiting_refinement: true,
+        refinement_prompt: needsRefinement ? `\n\n💬 When is this due? (Or say "no deadline" to skip)` : undefined,
+        awaiting_refinement: needsRefinement,
       };
       
       return taskResponse;
@@ -461,11 +581,20 @@ JSON:`;
       est_minutes?: number;
     }>;
   }> {
-    // Quick check: if message doesn't contain "and" or multiple commas, skip the multi-task detection
+    // Quick check: only look for multiple tasks if message has clear indicators
     const lowerMessage = message.toLowerCase();
-    const hasMultipleIndicators = 
-      (lowerMessage.includes(' and ') && lowerMessage.split(' and ').length > 1) ||
-      (lowerMessage.split(',').length > 2);
+    
+    // Check for patterns that indicate multiple distinct tasks
+    // "exam ... and ... project" or "task 1, task 2, task 3"
+    const hasMultipleDistinctItems = 
+      // Has "and" connecting what look like different activities/subjects
+      (/(?:exam|test|project|homework|assignment|meeting|call).*\band\b.*(?:exam|test|project|homework|assignment|meeting|call)/i.test(message)) ||
+      // Or has numbered/listed items
+      (/(?:1\.|first|•|-)\s*.+(?:2\.|second|•|-)\s*.+/i.test(message)) ||
+      // Or explicitly says "tasks" (plural) 
+      (/create\s+(?:some\s+)?tasks/i.test(message));
+    
+    const hasMultipleIndicators = hasMultipleDistinctItems;
     
     if (!hasMultipleIndicators) {
       console.log('Single task detected (no multi-task indicators)');
