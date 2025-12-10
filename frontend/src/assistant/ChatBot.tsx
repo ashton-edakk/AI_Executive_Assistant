@@ -332,6 +332,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       // Get the access token from the session for authenticated API calls
       const accessToken = session?.access_token;
       
+      console.log('ChatBot: Sending request with access_token:', accessToken ? `${accessToken.substring(0, 20)}...` : 'NO TOKEN');
+      console.log('ChatBot: Session user:', session?.user?.email);
+      
       const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: {
