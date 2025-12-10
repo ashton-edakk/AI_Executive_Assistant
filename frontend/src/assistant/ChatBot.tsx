@@ -332,9 +332,6 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
       // Get the access token from the session for authenticated API calls
       const accessToken = session?.access_token;
       
-      console.log('ChatBot: Sending request with access_token:', accessToken ? `${accessToken.substring(0, 20)}...` : 'NO TOKEN');
-      console.log('ChatBot: Session user:', session?.user?.email);
-      
       const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: {
@@ -371,17 +368,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
-        
-        // Check if awaiting refinement for multi-task (for follow-up clarification)
-        if (data.awaiting_refinement && data.refinement_state) {
-          setRefinementState({
-            active: true,
-            taskId: data.refinement_state.task_id,
-            taskTitle: data.refinement_state.task_title,
-          });
-        } else {
-          setRefinementState({ active: false, taskId: '', taskTitle: '' });
-        }
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       }
       // Handle single task creation response
       else if (data.ready_to_create && data.task_created) {
@@ -418,7 +405,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         }
       } 
       // Handle refinement response (user provided more details for a task)
-      else if (data.refinement_complete !== undefined) {
+      else if (data.refinement_complete) {
         const assistantMessage: Message = {
           id: Date.now() + 1,
           text: data.response,
@@ -433,17 +420,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           return updated;
         });
 
-        // Update refinement state based on response
-        if (data.refinement_complete) {
-          setRefinementState({ active: false, taskId: '', taskTitle: '' });
-        } else if (data.awaiting_refinement && data.refinement_state) {
-          // Continue refinement mode for multi-task updates
-          setRefinementState({
-            active: true,
-            taskId: data.refinement_state.task_id,
-            taskTitle: data.refinement_state.task_title,
-          });
-        }
+        // Clear refinement state
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       }
       else if (data.ready_to_create && !data.task_created) {
         const assistantMessage: Message = {

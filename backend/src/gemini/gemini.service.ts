@@ -262,19 +262,26 @@ export class GeminiService {
       
       CRITICAL RULES - BE ACTION-ORIENTED:
       1. ALWAYS create the task if you can understand what the user wants to do
-      2. Use SMART DEFAULTS for missing info, but TRACK what was explicitly stated vs inferred
-      3. The title is the only truly required field
+      2. Use SMART DEFAULTS - don't ask for missing information, infer it:
+         - No priority mentioned? Infer from context or default to "med"
+         - No time estimate? Estimate based on task type (exam study = 120min, quick call = 15min, meeting = 60min)
+         - No due date? Leave as null (that's fine!)
+      3. ONLY set clarification_needed=true if you genuinely cannot understand what task to create
+      4. The title is the only truly required field
 
       Task: "${body.message}"
       Current date: ${new Date().toISOString().split('T')[0]}
 
-      SMART INFERENCE GUIDE (use when user doesn't specify):
-      - "exam/test/final" → priority: "high", est_minutes: 120
-      - "homework/assignment" → priority: "med", est_minutes: 60
+      SMART INFERENCE GUIDE:
+      - "exam/test/final" → priority: "high", est_minutes: 120-180
+      - "homework/assignment" → priority: "med", est_minutes: 60-90
       - "project" → priority: "high", est_minutes: 120
-      - "call/meeting" → priority: "med", est_minutes: 30
+      - "call/meeting" → priority: "med", est_minutes: 30-60
       - "email/message" → priority: "low", est_minutes: 15
-      - Default if nothing matches → priority: "med", est_minutes: 60
+      - "review/read" → priority: "med", est_minutes: 30-45
+      - "tomorrow" in text → priority should be at least "med"
+      - "urgent/asap/critical" → priority: "high"
+      - "when you get a chance/sometime" → priority: "low"
 
       Return this exact JSON format:
       {
@@ -282,24 +289,16 @@ export class GeminiService {
         "notes": "any additional context or null",
         "due_date": "YYYY-MM-DD or null",
         "priority": "low" or "med" or "high",
-        "est_minutes": number,
-        "explicitly_stated": {
-          "due_date": true/false (did user EXPLICITLY mention a date/deadline?),
-          "priority": true/false (did user EXPLICITLY say high/low/urgent/important?),
-          "est_minutes": true/false (did user EXPLICITLY mention duration like "2 hours" or "30 min"?)
-        }
+        "est_minutes": number (your best estimate, never null unless truly unknowable),
+        "clarification_needed": false,
+        "clarification_question": null
       }
 
-      IMPORTANT for explicitly_stated:
-      - "tomorrow", "friday", "next week", "due tonight" = due_date is explicit (true)
-      - "high priority", "urgent", "important", "low priority" = priority is explicit (true)
-      - "2 hours", "30 minutes", "takes about an hour" = est_minutes is explicit (true)
-      - If user just says "project" without any of the above = all are inferred (false)
-
       Examples:
-      - "exam tomorrow" → due_date: explicit, priority: inferred (high from context), est_minutes: inferred
-      - "high priority meeting for 1 hour" → due_date: inferred (null), priority: explicit, est_minutes: explicit
-      - "finish my project" → all inferred (no date, no priority word, no time mentioned)
+      - "exam tomorrow" → {"title": "Study for exam", "due_date": "2024-12-10", "priority": "high", "est_minutes": 120, ...}
+      - "cs 484 project due friday" → {"title": "Work on CS 484 project", "due_date": "2024-12-13", "priority": "high", "est_minutes": 120, ...}
+      - "call mom" → {"title": "Call mom", "priority": "med", "est_minutes": 15, ...}
+      - "finish report" → {"title": "Finish report", "priority": "med", "est_minutes": 60, ...}
 
       JSON:`;
 
@@ -310,7 +309,7 @@ export class GeminiService {
       const cleanJson = text.replace(/```json\n?|\n?```/g, '');
       const parsedTask = JSON.parse(cleanJson);
 
-      console.log('Parsed task:', JSON.stringify(parsedTask, null, 2));
+      console.log('Parsed task:', parsedTask);
 
       // Apply smart defaults if still missing (safety net)
       if (!parsedTask.priority) {
@@ -329,28 +328,18 @@ export class GeminiService {
 
       // Check for invalid est_minutes (if provided but <= 0)
       if (parsedTask.est_minutes !== null && parsedTask.est_minutes !== undefined && parsedTask.est_minutes <= 0) {
-        parsedTask.est_minutes = 60; // Default to 60 minutes
+        parsedTask.est_minutes = 30; // Default to 30 minutes instead of asking
       }
 
-      // Check what was INFERRED (not explicitly stated by user) - these need clarification
-      const inferredFields: string[] = [];
-      const explicit = parsedTask.explicitly_stated || { due_date: false, priority: false, est_minutes: false };
+      // Check what's missing to generate ONE optional refinement prompt
+      const missingFields: string[] = [];
+      if (!parsedTask.due_date) missingFields.push('due_date');
+      if (!parsedTask.est_minutes) missingFields.push('est_minutes');
       
-      console.log('Explicitly stated fields:', JSON.stringify(explicit, null, 2));
-      
-      // Ask about due_date only if not stated AND not inferred
-      if (!explicit.due_date && !parsedTask.due_date) inferredFields.push('due_date');
-      // Always ask about priority and est_minutes if they weren't explicitly stated
-      if (explicit.priority !== true) inferredFields.push('priority');
-      if (explicit.est_minutes !== true) inferredFields.push('est_minutes');
-      
-      console.log('Inferred fields that need clarification:', inferredFields);
-      
-      // Generate a clarification prompt for inferred fields
+      // Generate a single, concise refinement prompt if fields are missing
       let refinementPrompt: string | undefined;
-      if (inferredFields.length > 0) {
-        refinementPrompt = this.generateClarificationPrompt(parsedTask.title, inferredFields);
-        console.log('Generated refinement prompt:', refinementPrompt);
+      if (missingFields.length > 0) {
+        refinementPrompt = await this.generateRefinementPrompt(parsedTask, missingFields);
       }
 
       // Create the task immediately with optional refinement prompt
@@ -362,7 +351,6 @@ export class GeminiService {
         awaiting_refinement: !!refinementPrompt,
       };
 
-      console.log('Task response awaiting_refinement:', taskResponse.awaiting_refinement);
       return taskResponse;
 
     } catch (error) {
@@ -393,7 +381,6 @@ export class GeminiService {
       due_date?: string;
       priority: 'low' | 'med' | 'high';
       est_minutes?: number;
-      explicitly_stated?: { due_date: boolean; priority: boolean; est_minutes: boolean };
     }>;
   }> {
     try {
@@ -428,25 +415,15 @@ export class GeminiService {
             "notes": "context or null",
             "due_date": "YYYY-MM-DD or null",
             "priority": "low/med/high",
-            "est_minutes": number,
-            "explicitly_stated": {
-              "due_date": true/false,
-              "priority": true/false,
-              "est_minutes": true/false
-            }
+            "est_minutes": number
           }
         ]
       }
 
-      For explicitly_stated: mark true ONLY if user explicitly mentioned that detail for THIS task.
-      "due tonight", "friday", "tomorrow" = due_date is explicit (true)
-      "urgent", "high priority" = priority is explicit (true)
-      "2 hours", "30 min" = est_minutes is explicit (true)
-
       Examples:
-      - "exam tomorrow and project due friday" → both have explicit due_date, inferred priority/time
-      - "I have a project and homework" → all fields inferred for both tasks
-      - "urgent meeting for 1 hour tomorrow" → all three fields explicit
+      - "exam tomorrow and cs 484 project due friday" → isMultiple: true, 2 tasks
+      - "study for my test" → isMultiple: false, 1 task
+      - "I have homework, a paper to write, and need to prepare for a presentation" → isMultiple: true, 3 tasks
 
       JSON:`;
 
@@ -465,7 +442,6 @@ export class GeminiService {
           due_date: task.due_date || null,
           priority: task.priority || 'med',
           est_minutes: task.est_minutes || 60,
-          explicitly_stated: task.explicitly_stated || { due_date: false, priority: false, est_minutes: false },
         }));
       }
 
@@ -480,7 +456,7 @@ export class GeminiService {
   }
 
   /**
-   * Format a multi-task response with clarification prompt for inferred fields
+   * Format a multi-task response
    */
   private createMultiTaskResponse(tasks: Array<{
     title: string;
@@ -488,16 +464,8 @@ export class GeminiService {
     due_date?: string;
     priority: 'low' | 'med' | 'high';
     est_minutes?: number;
-    explicitly_stated?: { due_date: boolean; priority: boolean; est_minutes: boolean };
   }>): MultiTaskResponse {
     let message = `✅ I'll create **${tasks.length} tasks** for you:\n\n`;
-    
-    // Track which fields need clarification across all tasks
-    const needsClarification = {
-      due_date: false,
-      priority: false,
-      est_minutes: false,
-    };
     
     tasks.forEach((task, index) => {
       const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'med' ? '🟡' : '🟢';
@@ -505,25 +473,9 @@ export class GeminiService {
       if (task.due_date) message += `   📅 Due: ${task.due_date}\n`;
       if (task.est_minutes) message += `   ⏱️ ~${task.est_minutes} min\n`;
       message += '\n';
-      
-      // Check if any fields were inferred for this task
-      const explicit = task.explicitly_stated || { due_date: false, priority: false, est_minutes: false };
-      if (!explicit.due_date && !task.due_date) needsClarification.due_date = true;
-      if (!explicit.priority) needsClarification.priority = true;
-      if (!explicit.est_minutes) needsClarification.est_minutes = true;
     });
 
-    message += `All tasks have been added to your task list!`;
-    
-    // Generate clarification prompt if any fields were inferred
-    const inferredFields: string[] = [];
-    if (needsClarification.due_date) inferredFields.push('due dates');
-    if (needsClarification.priority) inferredFields.push('priorities');
-    if (needsClarification.est_minutes) inferredFields.push('time estimates');
-    
-    if (inferredFields.length > 0) {
-      message += `\n\n💬 I set some defaults for ${inferredFields.join(', ')}. Want to adjust any of them? Just tell me (e.g., "task 1 is due tomorrow" or "task 2 is low priority"), or say "looks good" to keep them as is.`;
-    }
+    message += `\nAll tasks have been added to your task list!`;
 
     return {
       response: message,
@@ -556,27 +508,25 @@ export class GeminiService {
   }
 
   /**
-   * Generate a clarification prompt for fields that were inferred (not explicitly stated)
-   * This asks the user to confirm or update the inferred values
+   * Generate a single, concise refinement prompt for missing fields
+   * This is asked AFTER the task is created, not before
    */
-  private generateClarificationPrompt(taskTitle: string, inferredFields: string[]): string {
+  private async generateRefinementPrompt(task: any, missingFields: string[]): Promise<string> {
+    // Build a simple, direct question based on what's missing
     const questions: string[] = [];
     
-    if (inferredFields.includes('due_date')) {
-      questions.push('**when it\'s due**');
+    if (missingFields.includes('due_date')) {
+      questions.push('when is it due');
     }
-    if (inferredFields.includes('priority')) {
-      questions.push('**how urgent it is** (high/medium/low)');
-    }
-    if (inferredFields.includes('est_minutes')) {
-      questions.push('**how long it will take**');
+    if (missingFields.includes('est_minutes')) {
+      questions.push('how long it might take');
     }
     
     if (questions.length === 0) return '';
     
-    // Create a natural-sounding clarification request
-    const questionList = questions.join(', ');
-    return `\n\n💬 I set some defaults for "${taskTitle}". Could you tell me ${questionList}? Or say "looks good" if these work for you.`;
+    // Create a natural-sounding single question
+    const questionText = questions.join(' and ');
+    return `\n\n💬 Want to add more details? Just tell me ${questionText}, or say "looks good" to keep it as is.`;
   }
 
   private async handleClarificationResponse(body: InsertMessageDto): Promise<ChatResponse> {

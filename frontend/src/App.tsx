@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { LogIn, Calendar, CheckCircle, Sparkles, Clock, Brain, Mic, Zap, BarChart } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 import Dashboard from './dashboard/Dashboard';
-import { useSupabase } from './context/SupabaseSessionContext';
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Google OAuth config for the *direct* Calendar connect flow
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const GOOGLE_REDIRECT_URI = import.meta.env.VITE_GOOGLE_REDIRECT_URI;
+
+// Initialize Supabase client
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shared between Supabase Sign-In and our direct Google OAuth flow.
 const GOOGLE_OAUTH_SCOPES = [
@@ -14,6 +20,12 @@ const GOOGLE_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/tasks',
 ].join(' ');
+
+interface UserSession {
+  id: string;
+  email: string;
+  full_name: string;
+}
 
 const FeatureCard: React.FC<{ icon: React.ReactNode; title: string; description: string; delay: string }> = ({ icon, title, description, delay }) => (
   <div 
@@ -29,16 +41,9 @@ const FeatureCard: React.FC<{ icon: React.ReactNode; title: string; description:
 );
 
 const App: React.FC = () => {
-  // Use the shared Supabase client and session from context
-  const { supabase, session: supabaseSession, loading, signOut } = useSupabase();
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState<'home' | 'dashboard'>('home');
-  
-  // Derive user info from supabase session
-  const session = supabaseSession ? {
-    id: supabaseSession.user.id,
-    email: supabaseSession.user.email || '',
-    full_name: supabaseSession.user.user_metadata?.full_name || 'User',
-  } : null;
 
   // --- Handle hash changes for simple routing ---
   useEffect(() => {
@@ -51,34 +56,81 @@ const App: React.FC = () => {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // --- Ensure user exists in backend when session is available ---
+  // --- Optional: ensure user exists in backend users table ---
+  const ensureUser = async (accessToken: string) => {
+    try {
+      const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+      const res = await fetch(`${API_URL}/api/auth/ensure-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        console.error('Failed to ensure user:', await res.text());
+      }
+    } catch (err) {
+      console.error('Error ensuring user:', err);
+    }
+  };
+
+  // --- Initial session check + auth state listener ---
   useEffect(() => {
-    const ensureUser = async () => {
-      if (!supabaseSession?.access_token) return;
-      
+    const checkSession = async () => {
       try {
-        const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-        const res = await fetch(`${API_URL}/api/auth/ensure-user`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${supabaseSession.access_token}`,
-          },
-          body: JSON.stringify({}),
-        });
-        if (!res.ok) {
-          console.error('Failed to ensure user:', await res.text());
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session && session.user) {
+          // make sure there is a matching row in the backend users table
+          await ensureUser(session.access_token);
+
+          setSession({
+            id: session.user.id,
+            email: session.user.email || '',
+            full_name: session.user.user_metadata.full_name || 'User',
+          });
+        } else {
+          setSession(null);
         }
-      } catch (err) {
-        console.error('Error ensuring user:', err);
+      } catch (error) {
+        console.error('Error checking session:', error);
+        setSession(null);
+      } finally {
+        setLoading(false);
       }
     };
 
-    ensureUser();
-  }, [supabaseSession?.access_token]);
+    checkSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        if (session && session.user) {
+          await ensureUser(session.access_token);
+          setSession({
+            id: session.user.id,
+            email: session.user.email || '',
+            full_name: session.user.user_metadata.full_name || 'User',
+          });
+        } else {
+          setSession(null);
+        }
+      },
+    );
+
+    return () => {
+      if (authListener && authListener.subscription) {
+        authListener.subscription.unsubscribe();
+      }
+    };
+  }, []);
 
   // --- Handler for Supabase Google Sign In ---
   const handleGoogleSignIn = async () => {
+    setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -90,10 +142,12 @@ const App: React.FC = () => {
 
       if (error) {
         console.error('Error initiating Google Sign In:', error.message);
+        setLoading(false);
       }
       // On success, browser redirects; no further JS here.
     } catch (error) {
       console.error('Error initiating Google Sign In:', error);
+      setLoading(false);
     }
   };
 
@@ -126,7 +180,8 @@ const App: React.FC = () => {
 
   // --- Sign out handler ---
   const handleSignOut = async () => {
-    await signOut();
+    await supabase.auth.signOut();
+    setSession(null);
     setPage('home');
   };
 
