@@ -368,6 +368,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
+        setRefinementState({ active: false, taskId: '', taskTitle: '' });
       }
       // Handle single task creation response
       else if (data.ready_to_create && data.task_created) {

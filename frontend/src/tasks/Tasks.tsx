@@ -1,11 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import { Play, Square, CheckCircle, Clock, Trash2, MessageCircle, Filter, ArrowUpDown, ChevronDown } from 'lucide-react';
+import { useSupabase } from '../context/SupabaseSessionContext';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const API_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:8080';
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // DB row shape for tasks table
 interface TaskRow {
@@ -30,6 +27,7 @@ type SortOption = 'created' | 'priority' | 'due_date' | 'name';
 
 // --- TASKS COMPONENT ---
 export default function Tasks() {
+  const { supabase, session } = useSupabase();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -79,24 +77,13 @@ export default function Tasks() {
   }, [tasks, filterStatus, sortBy]);
 
   // --- Fetch tasks for the current user ---
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
+    if (!session?.user) {
+      setErrorMessage('You must be signed in to view tasks.');
+      return;
+    }
+
     try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        console.error('fetchTasks: session error', sessionError);
-        setErrorMessage('Could not read auth session.');
-        return;
-      }
-
-      if (!session || !session.user) {
-        setErrorMessage('You must be signed in to view tasks.');
-        return;
-      }
-
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
@@ -115,7 +102,7 @@ export default function Tasks() {
       console.error('fetchTasks exception', err);
       setErrorMessage('Failed to fetch tasks.');
     }
-  };
+  }, [supabase, session]);
 
   // --- Toggle task status between todo/done ---
   const toggleTask = async (task: Task) => {
@@ -148,7 +135,6 @@ export default function Tasks() {
   // --- Delete task (and related sessions/blocks/calendar events) ---
   const deleteTask = async (id: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const accessToken = session?.access_token;
 
       // First, get any Google Calendar event IDs from task_blocks
@@ -242,21 +228,19 @@ export default function Tasks() {
   }, []);
 
   // Get access token for API calls
-  const getAccessToken = async (): Promise<string | null> => {
-    const { data: { session } } = await supabase.auth.getSession();
+  const getAccessToken = useCallback((): string | null => {
     return session?.access_token || null;
-  };
+  }, [session]);
 
   // Start tracking a task
   const startTask = async (taskId: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) {
         setErrorMessage('You must be signed in to track tasks.');
         return;
       }
 
-      const accessToken = await getAccessToken();
+      const accessToken = getAccessToken();
       const response = await fetch(`${API_URL}/exec/start`, {
         method: 'POST',
         headers: {
@@ -293,13 +277,12 @@ export default function Tasks() {
   // Stop tracking a task (pause)
   const stopTask = async (taskId: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) {
         setErrorMessage('You must be signed in to track tasks.');
         return;
       }
 
-      const accessToken = await getAccessToken();
+      const accessToken = getAccessToken();
       const response = await fetch(`${API_URL}/exec/stop`, {
         method: 'POST',
         headers: {
@@ -329,13 +312,12 @@ export default function Tasks() {
   // Complete a task
   const completeTask = async (taskId: string) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) {
         setErrorMessage('You must be signed in to complete tasks.');
         return;
       }
 
-      const accessToken = await getAccessToken();
+      const accessToken = getAccessToken();
       const response = await fetch(`${API_URL}/exec/done`, {
         method: 'POST',
         headers: {
@@ -376,42 +358,33 @@ export default function Tasks() {
   };
 
   useEffect(() => {
+    if (!session?.user) return;
+    
     fetchTasks();
 
     // Subscribe to realtime changes on the tasks table
-    const setupRealtimeSubscription = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) return;
+    const channel = supabase
+      .channel('tasks-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          console.log('Tasks realtime update:', payload);
+          // Refresh the task list when any change happens
+          fetchTasks();
+        }
+      )
+      .subscribe();
 
-      const channel = supabase
-        .channel('tasks-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*', // Listen to INSERT, UPDATE, DELETE
-            schema: 'public',
-            table: 'tasks',
-            filter: `user_id=eq.${session.user.id}`,
-          },
-          (payload) => {
-            console.log('Tasks realtime update:', payload);
-            // Refresh the task list when any change happens
-            fetchTasks();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    };
-
-    const cleanup = setupRealtimeSubscription();
-    
     return () => {
-      cleanup.then((unsub) => unsub?.());
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [session, supabase, fetchTasks]);
 
   return (
     <div className="p-4 max-w-lg mx-auto">
