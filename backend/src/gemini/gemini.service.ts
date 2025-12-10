@@ -305,12 +305,34 @@ Return ONLY this JSON (no explanation):
 
 JSON:`;
 
+      console.log('Calling Gemini for single task parsing...');
       const result = await this.model.generateContent(prompt);
       const geminiResult = await result.response;
       const text = geminiResult.text().trim();
       
-      const cleanJson = text.replace(/```json\n?|\n?```/g, '');
-      const parsedTask = JSON.parse(cleanJson);
+      console.log('Single task Gemini response:', text);
+      
+      // More robust JSON cleaning
+      let cleanJson = text;
+      // Remove markdown code blocks
+      cleanJson = cleanJson.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      // Trim whitespace
+      cleanJson = cleanJson.trim();
+      
+      // Try to parse, with better error handling
+      let parsedTask;
+      try {
+        parsedTask = JSON.parse(cleanJson);
+      } catch (jsonError) {
+        console.error('JSON parse error, raw text:', text);
+        // Try to extract JSON from the response if it's wrapped in other text
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsedTask = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error('Could not parse JSON from Gemini response');
+        }
+      }
 
       console.log('Parsed task:', parsedTask);
 
@@ -365,18 +387,64 @@ JSON:`;
 
     } catch (error) {
       console.error('Task parsing error:', error);
-      // Fall back to regular chat if parsing fails
-      const prompt = `The user mentioned a task but I couldn't parse it properly. Ask them to rephrase more clearly. User message: "${body.message}"`;
       
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-
-      const fallbackResponse: RegularChatResponse = {
-        response: text
+      // Create a fallback task from the message itself - don't try another Gemini call
+      // Extract a reasonable title from the user's message
+      const lowerMessage = body.message.toLowerCase();
+      let title = body.message;
+      
+      // Try to extract the task part from common patterns
+      const patterns = [
+        /create (?:a )?task (?:to |for )?(.+)/i,
+        /add (?:a )?task (?:to |for )?(.+)/i,
+        /(?:i need to|i have to|remind me to) (.+)/i,
+      ];
+      
+      for (const pattern of patterns) {
+        const match = body.message.match(pattern);
+        if (match && match[1]) {
+          title = match[1].trim();
+          // Remove trailing punctuation
+          title = title.replace(/[.!?]+$/, '');
+          // Capitalize first letter
+          title = title.charAt(0).toUpperCase() + title.slice(1);
+          break;
+        }
+      }
+      
+      // Infer priority and time from the message
+      let priority: 'low' | 'med' | 'high' = 'med';
+      let est_minutes = 60;
+      
+      if (lowerMessage.includes('exam') || lowerMessage.includes('test') || lowerMessage.includes('urgent')) {
+        priority = 'high';
+        est_minutes = 120;
+      } else if (lowerMessage.includes('project')) {
+        priority = 'high';
+        est_minutes = 90;
+      }
+      
+      const fallbackTask = {
+        title,
+        notes: null,
+        due_date: null,
+        priority,
+        est_minutes,
+        clarification_needed: false,
+        clarification_question: null,
       };
       
-      return fallbackResponse;
+      console.log('Using fallback task:', fallbackTask);
+      
+      const taskResponse: TaskCreatedWithRefinementResponse = {
+        response: this.formatTaskCreationMessage(fallbackTask),
+        parsed_task: fallbackTask,
+        ready_to_create: true,
+        refinement_prompt: `\n\n💬 When is this due? (Or say "no deadline" to skip)`,
+        awaiting_refinement: true,
+      };
+      
+      return taskResponse;
     }
   }
 
@@ -393,6 +461,17 @@ JSON:`;
       est_minutes?: number;
     }>;
   }> {
+    // Quick check: if message doesn't contain "and" or multiple commas, skip the multi-task detection
+    const lowerMessage = message.toLowerCase();
+    const hasMultipleIndicators = 
+      (lowerMessage.includes(' and ') && lowerMessage.split(' and ').length > 1) ||
+      (lowerMessage.split(',').length > 2);
+    
+    if (!hasMultipleIndicators) {
+      console.log('Single task detected (no multi-task indicators)');
+      return { isMultiple: false, tasks: [] };
+    }
+    
     try {
       const currentDate = new Date().toISOString().split('T')[0];
       const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
@@ -427,17 +506,26 @@ Return ONLY this JSON:
 
 JSON:`;
 
+      console.log('Calling Gemini for multi-task detection...');
       const result = await this.model.generateContent(prompt);
       const response = await result.response;
       const text = response.text().trim();
       
-      const cleanJson = text.replace(/```json\n?|\n?```/g, '');
+      console.log('Multi-task Gemini response:', text);
+      
+      // More robust JSON cleaning
+      let cleanJson = text;
+      // Remove markdown code blocks
+      cleanJson = cleanJson.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      // Trim whitespace
+      cleanJson = cleanJson.trim();
+      
       const parsed = JSON.parse(cleanJson);
 
       // Apply defaults to each task
       if (parsed.tasks && Array.isArray(parsed.tasks)) {
         parsed.tasks = parsed.tasks.map((task: any) => ({
-          title: task.title,
+          title: task.title || 'Untitled Task',
           notes: task.notes || null,
           due_date: task.due_date || null,
           priority: task.priority || 'med',
@@ -451,6 +539,7 @@ JSON:`;
       };
     } catch (error) {
       console.error('Multi-task detection error:', error);
+      // Return false to fall through to single task parsing
       return { isMultiple: false, tasks: [] };
     }
   }
