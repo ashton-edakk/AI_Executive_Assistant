@@ -32,9 +32,12 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid token format');
     }
     
+    console.log('Auth guard: Validating token starting with:', token.substring(0, 30) + '...');
+    
     const { data, error } = await this.supabase.auth.getUser(token);
     if (error) {
-      console.log('Auth guard: Supabase error:', error.message);
+      console.log('Auth guard: Supabase validation failed:', error.message);
+      console.log('Auth guard: Token header (decoded):', Buffer.from(token.split('.')[0], 'base64').toString());
       throw new UnauthorizedException(`Invalid Supabase session token: ${error.message}`);
     }
     
@@ -43,6 +46,8 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid Supabase session token: No user');
     }
 
+    console.log('Auth guard: Token valid for user:', data.user.email);
+    
     // Attach user (may include provider_token if you configured Google OAuth scopes)
     req.user = data.user;
     return true;
