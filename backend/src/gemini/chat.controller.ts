@@ -138,13 +138,8 @@ export class ChatController {
         if (calendarFail > 0) {
           responseMessage += `\n⚠️ Could not add ${calendarFail} event(s) to calendar.`;
         }
-        
-        // Add refinement prompt for any tasks missing details
-        const tasksNeedingDetails = createdTasks.filter(t => !t.due_date || !t.est_minutes);
-        if (tasksNeedingDetails.length > 0) {
-          responseMessage += `\n\n💬 Want to add more details? You can say things like "update Finance Exam to 3 hours" or "set CS 484 Project due date to tomorrow".`;
-        }
 
+        // For multi-task, return with awaiting_refinement so frontend can track follow-up
         return {
           response: responseMessage,
           tasks: createdTasks,
@@ -153,6 +148,13 @@ export class ChatController {
           is_multi_task: true,
           created_count: createdTasks.length,
           failed_count: failedTasks.length,
+          // Enable refinement mode for multi-task so user can provide more details
+          awaiting_refinement: createdTasks.length > 0,
+          refinement_state: createdTasks.length > 0 ? {
+            active: true,
+            task_id: createdTasks[0].id, // Track first task for refinement
+            task_title: `${createdTasks.length} tasks`,
+          } : undefined,
         };
       }
 
@@ -655,18 +657,51 @@ In the Tasks panel:
           lowerMessage.includes('keep it') ||
           lowerMessage.includes('no changes') ||
           lowerMessage === 'ok' ||
-          lowerMessage === 'okay') {
+          lowerMessage === 'okay' ||
+          lowerMessage === 'good' ||
+          lowerMessage === 'fine' ||
+          lowerMessage === 'done' ||
+          lowerMessage === 'skip') {
         return {
-          response: `👍 Got it! "${refinementState.task_title}" is all set.`,
+          response: `👍 Got it! Your ${refinementState.task_title.includes('tasks') ? 'tasks are' : `"${refinementState.task_title}" is`} all set.`,
           refinement_complete: true,
         };
       }
 
+      // For multi-task refinement, get all user's recent tasks to match against
+      const tasks = await this.tasksService.getUserTasks(userId);
+      const taskTitles = tasks.map(t => t.title).join(', ');
+      
       // Parse the refinement message to extract updates
       const parseResult = await this.geminiService.parseEditRequest(
-        `Update task "${refinementState.task_title}": ${message}`,
-        refinementState.task_title
+        message,
+        taskTitles
       );
+
+      console.log('Refinement parse result:', JSON.stringify(parseResult, null, 2));
+
+      // Find the task to update
+      let targetTask: any = null;
+      
+      if (parseResult.taskTitle) {
+        // Try to match the task by title
+        const searchTitle = parseResult.taskTitle.toLowerCase();
+        targetTask = tasks.find(t => 
+          t.title.toLowerCase().includes(searchTitle) ||
+          searchTitle.includes(t.title.toLowerCase())
+        );
+      }
+      
+      // If no match found and we have a single task in refinement, use that
+      if (!targetTask && !refinementState.task_title.includes('tasks')) {
+        targetTask = tasks.find(t => t.id === refinementState.task_id);
+      }
+      
+      // If still no match and user just gave updates without specifying task, apply to first recent task
+      if (!targetTask && tasks.length > 0) {
+        // Get most recently created task (first in the sorted list if sorted by created_at desc)
+        targetTask = tasks[0];
+      }
 
       const updates: any = {};
       let changeDescription = '';
@@ -689,18 +724,36 @@ In the Tasks panel:
 
       if (Object.keys(updates).length === 0) {
         return {
-          response: `I couldn't understand those details. Try something like "due tomorrow, 2 hours" or "looks good" to keep it as is.`,
+          response: `I couldn't understand those details. Try something like:\n• "due tomorrow"\n• "2 hours"\n• "high priority"\n• "looks good" to keep as is`,
           refinement_complete: false,
+          awaiting_refinement: true,
+          refinement_state: refinementState,
+        };
+      }
+
+      if (!targetTask) {
+        return {
+          response: `I couldn't find a task to update. Try specifying the task name, like "project is due tomorrow"`,
+          refinement_complete: false,
+          awaiting_refinement: true,
+          refinement_state: refinementState,
         };
       }
 
       // Update the task
-      await this.tasksService.updateTask(refinementState.task_id, updates);
+      await this.tasksService.updateTask(targetTask.id, updates);
+
+      // Check if there might be more tasks needing updates
+      const continuePrompt = refinementState.task_title.includes('tasks') 
+        ? `\n\n💬 Want to update any other tasks? Or say "done" if you're all set.`
+        : '';
 
       return {
-        response: `✅ Updated "${refinementState.task_title}":\n${changeDescription}`,
+        response: `✅ Updated "${targetTask.title}":\n${changeDescription}${continuePrompt}`,
         task_updated: true,
-        refinement_complete: true,
+        refinement_complete: !refinementState.task_title.includes('tasks'), // Keep refinement mode for multi-task
+        awaiting_refinement: refinementState.task_title.includes('tasks'),
+        refinement_state: refinementState.task_title.includes('tasks') ? refinementState : undefined,
         updates,
       };
     } catch (error: any) {

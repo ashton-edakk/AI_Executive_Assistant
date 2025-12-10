@@ -368,7 +368,17 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           partialTask: null,
           originalMessage: '',
         });
-        setRefinementState({ active: false, taskId: '', taskTitle: '' });
+        
+        // Check if awaiting refinement for multi-task (for follow-up clarification)
+        if (data.awaiting_refinement && data.refinement_state) {
+          setRefinementState({
+            active: true,
+            taskId: data.refinement_state.task_id,
+            taskTitle: data.refinement_state.task_title,
+          });
+        } else {
+          setRefinementState({ active: false, taskId: '', taskTitle: '' });
+        }
       }
       // Handle single task creation response
       else if (data.ready_to_create && data.task_created) {
@@ -405,7 +415,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         }
       } 
       // Handle refinement response (user provided more details for a task)
-      else if (data.refinement_complete) {
+      else if (data.refinement_complete !== undefined) {
         const assistantMessage: Message = {
           id: Date.now() + 1,
           text: data.response,
@@ -420,8 +430,17 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
           return updated;
         });
 
-        // Clear refinement state
-        setRefinementState({ active: false, taskId: '', taskTitle: '' });
+        // Update refinement state based on response
+        if (data.refinement_complete) {
+          setRefinementState({ active: false, taskId: '', taskTitle: '' });
+        } else if (data.awaiting_refinement && data.refinement_state) {
+          // Continue refinement mode for multi-task updates
+          setRefinementState({
+            active: true,
+            taskId: data.refinement_state.task_id,
+            taskTitle: data.refinement_state.task_title,
+          });
+        }
       }
       else if (data.ready_to_create && !data.task_created) {
         const assistantMessage: Message = {
