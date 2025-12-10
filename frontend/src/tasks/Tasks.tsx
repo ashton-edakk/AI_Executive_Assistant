@@ -137,64 +137,36 @@ export default function Tasks() {
     try {
       const accessToken = session?.access_token;
 
-      // First, get any Google Calendar event IDs from task_blocks
-      const { data: blocks } = await supabase
-        .from('task_blocks')
-        .select('google_event_id')
-        .eq('task_id', id)
-        .not('google_event_id', 'is', null);
-
-      // Delete Google Calendar events if any exist
-      if (blocks && blocks.length > 0) {
-        for (const block of blocks) {
-          if (block.google_event_id) {
-            try {
-              await fetch(`${API_URL}/calendar/events/${encodeURIComponent(block.google_event_id)}`, {
-                method: 'DELETE',
-                headers: {
-                  ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
-                },
-              });
-              console.log('Deleted calendar event:', block.google_event_id);
-            } catch (calErr) {
-              console.error('Failed to delete calendar event:', calErr);
-              // Continue anyway - event might already be deleted
-            }
-          }
-        }
-      }
-
-      // Delete related task_sessions (foreign key constraint)
-      const { error: sessionsError } = await supabase
-        .from('task_sessions')
-        .delete()
-        .eq('task_id', id);
-      
-      if (sessionsError) {
-        console.error('deleteTask: sessions error', sessionsError);
-        // Continue anyway - might not have sessions
-      }
-
-      // Delete related task_blocks
-      const { error: blocksError } = await supabase
-        .from('task_blocks')
-        .delete()
-        .eq('task_id', id);
-      
-      if (blocksError) {
-        console.error('deleteTask: blocks error', blocksError);
-        // Continue anyway - might not have blocks
-      }
-
-      // Finally, delete the task itself
-      const { error } = await supabase.from('tasks').delete().eq('id', id);
-
-      if (error) {
-        console.error('deleteTask error', error);
-        setErrorMessage(error.message);
+      if (!accessToken) {
+        setErrorMessage('You must be signed in to delete tasks.');
         return;
       }
 
+      // Use the backend endpoint that handles full task deletion including calendar events
+      const response = await fetch(`${API_URL}/tasks/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.message || `Failed to delete task (${response.status})`;
+        console.error('deleteTask API error:', errorMessage);
+        setErrorMessage(errorMessage);
+        return;
+      }
+
+      const result = await response.json();
+      console.log('Task deleted:', result);
+
+      // Show info if some calendar events couldn't be deleted
+      if (result.calendarEventsFailed > 0) {
+        console.warn(`${result.calendarEventsFailed} calendar event(s) could not be deleted`);
+      }
+
+      // Update local state
       setTasks((prev) => prev.filter((t) => t.id !== id));
       setErrorMessage(null);
     } catch (err: any) {

@@ -17,6 +17,7 @@ import { GeminiController } from './gemini/gemini.controller';
 import { ChatController } from './gemini/chat.controller';
 import { AuthService } from './auth/auth.service';
 import { TasksService } from './tasks/tasks.service';
+import { TasksController } from './tasks/tasks.controller';
 
 // Google OAuth / Supabase auth (main branch)
 import { GoogleAuthController } from './auth/google-auth.controller';
@@ -50,6 +51,7 @@ import { PlannerService } from './planning/services/planner.service';
     ChatController,
     PlanningController,
     GoogleAuthController,
+    TasksController,
   ],
   providers: [
     AppService,
